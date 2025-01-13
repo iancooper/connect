@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cosmosdb
 
 import (
@@ -26,7 +40,7 @@ func ExecMessageBatch(ctx context.Context, batch service.MessageBatch, client *a
 			fmt.Errorf("current batch has %d messages, but the CosmosDB transactional batch limit is %d", len(batch), maxTransactionalBatchSize)
 	}
 
-	pkQueryResult, err := batch.BloblangQueryValue(0, config.PartitionKeys)
+	pkQueryResult, err := batch.BloblangExecutor(config.PartitionKeys).QueryValue(0)
 	if err != nil {
 		return azcosmos.TransactionalBatchResponse{}, fmt.Errorf("failed to evaluate partition key values: %s", err)
 	}
@@ -114,7 +128,7 @@ func ExecMessageBatch(ctx context.Context, batch service.MessageBatch, client *a
 
 				var value any
 				if po.Value != nil {
-					if value, err = batch.BloblangQueryValue(idx, po.Value); err != nil {
+					if value, err = batch.BloblangExecutor(po.Value).QueryValue(idx); err != nil {
 						return azcosmos.TransactionalBatchResponse{}, fmt.Errorf("failed to evaluate patch value: %s", err)
 					}
 				}

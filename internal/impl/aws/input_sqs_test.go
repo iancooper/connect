@@ -1,9 +1,24 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package aws
 
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,15 +36,15 @@ import (
 type mockSqsInput struct {
 	sqsAPI
 
-	mtx          chan struct{}
+	mtx          sync.Mutex
 	queueTimeout int32
 	messages     []types.Message
 	mesTimeouts  map[string]int32
 }
 
 func (m *mockSqsInput) do(fn func()) {
-	<-m.mtx
-	defer func() { m.mtx <- struct{}{} }()
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
 	fn()
 }
 
@@ -40,7 +55,7 @@ func (m *mockSqsInput) TimeoutLoop(ctx context.Context) {
 	for {
 		select {
 		case <-t.C:
-			<-m.mtx
+			m.mtx.Lock()
 
 			for mesID, timeout := range m.mesTimeouts {
 				timeout = timeout - 1
@@ -51,7 +66,7 @@ func (m *mockSqsInput) TimeoutLoop(ctx context.Context) {
 				}
 			}
 
-			m.mtx <- struct{}{}
+			m.mtx.Unlock()
 		case <-ctx.Done():
 			return
 		}
@@ -59,8 +74,8 @@ func (m *mockSqsInput) TimeoutLoop(ctx context.Context) {
 }
 
 func (m *mockSqsInput) ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
-	<-m.mtx
-	defer func() { m.mtx <- struct{}{} }()
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
 
 	messages := make([]types.Message, 0, len(m.messages))
 
@@ -74,13 +89,9 @@ func (m *mockSqsInput) ReceiveMessage(context.Context, *sqs.ReceiveMessageInput,
 	return &sqs.ReceiveMessageOutput{Messages: messages}, nil
 }
 
-func (m *mockSqsInput) GetQueueAttributes(input *sqs.GetQueueAttributesInput) (*sqs.GetQueueAttributesOutput, error) {
-	return &sqs.GetQueueAttributesOutput{Attributes: map[string]string{sqsiAttributeNameVisibilityTimeout: strconv.Itoa(int(m.queueTimeout))}}, nil
-}
-
 func (m *mockSqsInput) ChangeMessageVisibilityBatch(ctx context.Context, input *sqs.ChangeMessageVisibilityBatchInput, opts ...func(*sqs.Options)) (*sqs.ChangeMessageVisibilityBatchOutput, error) {
-	<-m.mtx
-	defer func() { m.mtx <- struct{}{} }()
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
 
 	for _, entry := range input.Entries {
 		if _, found := m.mesTimeouts[*entry.Id]; found {
@@ -94,16 +105,14 @@ func (m *mockSqsInput) ChangeMessageVisibilityBatch(ctx context.Context, input *
 }
 
 func (m *mockSqsInput) DeleteMessageBatch(ctx context.Context, input *sqs.DeleteMessageBatchInput, opts ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
-	<-m.mtx
-	defer func() { m.mtx <- struct{}{} }()
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
 
 	for _, entry := range input.Entries {
 		delete(m.mesTimeouts, *entry.Id)
-		for i, message := range m.messages {
-			if *entry.Id == *message.MessageId {
-				m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			}
-		}
+		m.messages = slices.DeleteFunc(m.messages, func(msg types.Message) bool {
+			return *entry.Id == *msg.MessageId
+		})
 	}
 
 	return &sqs.DeleteMessageBatchOutput{}, nil
@@ -144,6 +153,8 @@ func TestSQSInput(t *testing.T) {
 			DeleteMessage:       true,
 			ResetVisibility:     true,
 			MaxNumberOfMessages: 10,
+			MaxOutstanding:      100,
+			MessageTimeout:      10 * time.Second,
 		},
 		conf,
 		nil,
@@ -151,12 +162,10 @@ func TestSQSInput(t *testing.T) {
 	require.NoError(t, err)
 
 	mockInput := &mockSqsInput{
-		mtx:          make(chan struct{}, 1),
 		queueTimeout: 10,
 		messages:     messages,
 		mesTimeouts:  make(map[string]int32, expectedMessages),
 	}
-	mockInput.mtx <- struct{}{}
 	r.sqs = mockInput
 	go mockInput.TimeoutLoop(tCtx)
 
@@ -164,7 +173,7 @@ func TestSQSInput(t *testing.T) {
 	err = r.Connect(tCtx)
 	require.NoError(t, err)
 
-	receivedMessages := make([]types.Message, 0, expectedMessages)
+	receivedMessages := make([]sqsMessage, 0, expectedMessages)
 
 	// Check that all messages are received from the reader
 	require.Eventually(t, func() bool {
@@ -178,7 +187,7 @@ func TestSQSInput(t *testing.T) {
 			}
 		}
 		return len(receivedMessages) == expectedMessages
-	}, 30*time.Second, time.Second)
+	}, 30*time.Second, 100*time.Millisecond)
 
 	// Wait over the defined queue timeout and check that messages have not been received again
 	time.Sleep(time.Duration(mockInput.queueTimeout+5) * time.Second)
@@ -195,7 +204,9 @@ func TestSQSInput(t *testing.T) {
 
 	// Ack all messages and ensure that they are deleted from SQS
 	for _, message := range receivedMessages {
-		r.ackMessagesChan <- sqsMessageHandle{id: *message.MessageId, receiptHandle: *message.ReceiptHandle}
+		if message.handle != nil {
+			r.ackMessagesChan <- message.handle
+		}
 	}
 
 	require.Eventually(t, func() bool {
@@ -204,7 +215,7 @@ func TestSQSInput(t *testing.T) {
 			msgsLen = len(mockInput.messages)
 		})
 		return msgsLen == 0
-	}, 5*time.Second, time.Second)
+	}, 5*time.Second, 100*time.Millisecond)
 }
 
 func TestSQSInputBatchAck(t *testing.T) {
@@ -233,6 +244,8 @@ func TestSQSInputBatchAck(t *testing.T) {
 			DeleteMessage:       true,
 			ResetVisibility:     true,
 			MaxNumberOfMessages: 10,
+			MaxOutstanding:      100,
+			MessageTimeout:      10 * time.Second,
 		},
 		conf,
 		nil,
@@ -240,12 +253,10 @@ func TestSQSInputBatchAck(t *testing.T) {
 	require.NoError(t, err)
 
 	mockInput := &mockSqsInput{
-		mtx:          make(chan struct{}, 1),
 		queueTimeout: 10,
 		messages:     messages,
 		mesTimeouts:  make(map[string]int32, expectedMessages),
 	}
-	mockInput.mtx <- struct{}{}
 	r.sqs = mockInput
 	go mockInput.TimeoutLoop(tCtx)
 

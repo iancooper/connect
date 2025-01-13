@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confluent
 
 import (
@@ -13,8 +27,11 @@ import (
 	"time"
 
 	"github.com/Jeffail/shutdown"
+	franz_sr "github.com/twmb/franz-go/pkg/sr"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
+
+	"github.com/redpanda-data/connect/v4/internal/impl/confluent/sr"
 )
 
 func schemaRegistryEncoderConfig() *service.ConfigSpec {
@@ -47,15 +64,15 @@ However, it is possible to instead consume documents in https://pkg.go.dev/githu
 
 === Known issues
 
-Important! There is an outstanding issue in the https://github.com/linkedin/goavro[avro serializing library^] that benthos uses which means it https://github.com/linkedin/goavro/issues/252[doesn't encode logical types correctly^]. It's still possible to encode logical types that are in-line with the spec if ` + "`avro_raw_json` is set to true" + `, though now of course non-logical types will not be in-line with the spec.
+Important! There is an outstanding issue in the https://github.com/linkedin/goavro[avro serializing library^] that Redpanda Connect uses which means it https://github.com/linkedin/goavro/issues/252[doesn't encode logical types correctly^]. It's still possible to encode logical types that are in-line with the spec if ` + "`avro_raw_json` is set to true" + `, though now of course non-logical types will not be in-line with the spec.
 
 == Protobuf format
 
-This processor encodes protobuf messages either from any format parsed within Benthos (encoded as JSON by default), or from raw JSON documents, you can read more about JSON mapping of protobuf messages here: https://developers.google.com/protocol-buffers/docs/proto3#json
+This processor encodes protobuf messages either from any format parsed within Redpanda Connect (encoded as JSON by default), or from raw JSON documents, you can read more about JSON mapping of protobuf messages here: https://developers.google.com/protocol-buffers/docs/proto3#json
 
 === Multiple message support
 
-When a target subject presents a protobuf schema that contains multiple messages it becomes ambiguous which message definition a given input data should be encoded against. In such scenarios Benthos will attempt to encode the data against each of them and select the first to successfully match against the data, this process currently *ignores all nested message definitions*. In order to speed up this exhaustive search the last known successful message will be attempted first for each subsequent input.
+When a target subject presents a protobuf schema that contains multiple messages it becomes ambiguous which message definition a given input data should be encoded against. In such scenarios Redpanda Connect will attempt to encode the data against each of them and select the first to successfully match against the data, this process currently *ignores all nested message definitions*. In order to speed up this exhaustive search the last known successful message will be attempted first for each subsequent input.
 
 We will be considering alternative approaches in future so please https://redpanda.com/slack[get in touch^] with thoughts and feedback.
 `).
@@ -93,7 +110,7 @@ func init() {
 //------------------------------------------------------------------------------
 
 type schemaRegistryEncoder struct {
-	client             *schemaRegistryClient
+	client             *sr.Client
 	subject            *service.InterpolatedString
 	avroRawJSON        bool
 	schemaRefreshAfter time.Duration
@@ -164,7 +181,7 @@ func newSchemaRegistryEncoder(
 		nowFn:              time.Now,
 	}
 	var err error
-	if s.client, err = newSchemaRegistryClient(urlStr, reqSigner, tlsConf, mgr); err != nil {
+	if s.client, err = sr.NewClient(urlStr, reqSigner, tlsConf, mgr); err != nil {
 		return nil, err
 	}
 
@@ -303,7 +320,7 @@ func (s *schemaRegistryEncoder) getLatestEncoder(subject string) (schemaEncoder,
 	ctx, done := context.WithTimeout(context.Background(), time.Second*5)
 	defer done()
 
-	resPayload, err := s.client.GetSchemaBySubjectAndVersion(ctx, subject, nil)
+	resPayload, err := s.client.GetSchemaBySubjectAndVersion(ctx, subject, nil, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -312,14 +329,12 @@ func (s *schemaRegistryEncoder) getLatestEncoder(subject string) (schemaEncoder,
 
 	var encoder schemaEncoder
 	switch resPayload.Type {
-	case "PROTOBUF":
-		encoder, err = s.getProtobufEncoder(ctx, resPayload)
-	case "", "AVRO":
-		encoder, err = s.getAvroEncoder(ctx, resPayload)
-	case "JSON":
-		encoder, err = s.getJSONEncoder(ctx, resPayload)
+	case franz_sr.TypeProtobuf:
+		encoder, err = s.getProtobufEncoder(ctx, resPayload.Schema)
+	case franz_sr.TypeJSON:
+		encoder, err = s.getJSONEncoder(ctx, resPayload.Schema)
 	default:
-		err = fmt.Errorf("schema type %v not supported", resPayload.Type)
+		encoder, err = s.getAvroEncoder(ctx, resPayload.Schema)
 	}
 	if err != nil {
 		return nil, 0, err

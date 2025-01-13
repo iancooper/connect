@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package javascript
 
 import (
@@ -46,7 +60,7 @@ func javascriptProcessorConfig() *service.ConfigSpec {
 		Description(`
 The https://github.com/dop251/goja[execution engine^] behind this processor provides full ECMAScript 5.1 support (including regex and strict mode). Most of the ECMAScript 6 spec is implemented but this is a work in progress.
 
-Imports via `+"`require`"+` should work similarly to NodeJS, and access to the console is supported which will print via the Benthos logger. More caveats can be found on https://github.com/dop251/goja#known-incompatibilities-and-caveats[GitHub^].
+Imports via `+"`require`"+` should work similarly to NodeJS, and access to the console is supported which will print via the Redpanda Connect logger. More caveats can be found on https://github.com/dop251/goja#known-incompatibilities-and-caveats[GitHub^].
 
 This processor is implemented using the https://github.com/dop251/goja[github.com/dop251/goja^] library.`).
 		Footnotes(`
@@ -59,10 +73,10 @@ Although technically possible, it is recommended that you do not rely on the glo
 == Functions
 `+description.String()+`
 `).
-		Field(service.NewInterpolatedStringField(codeField).
+		Field(service.NewStringField(codeField).
 			Description("An inline JavaScript program to run. One of `"+codeField+"` or `"+fileField+"` must be defined.").
 			Optional()).
-		Field(service.NewInterpolatedStringField(fileField).
+		Field(service.NewStringField(fileField).
 			Description("A file containing a JavaScript program to run. One of `"+codeField+"` or `"+fileField+"` must be defined.").
 			Optional()).
 		Field(service.NewStringListField(includeField).
@@ -160,7 +174,7 @@ func newJavascriptProcessorFromConfig(conf *service.ParsedConfig, mgr *service.R
 	code, _ := conf.FieldString(codeField)
 	file, _ := conf.FieldString(fileField)
 	if file == "" && code == "" {
-		return nil, fmt.Errorf("either a `%v` or `%v` must be specified", codeField, fileField)
+		return nil, fmt.Errorf("either a `%s` or `%s` must be specified", codeField, fileField)
 	}
 
 	filename := "main.js"
@@ -168,7 +182,7 @@ func newJavascriptProcessorFromConfig(conf *service.ParsedConfig, mgr *service.R
 		// Open file and read code
 		codeBytes, err := service.ReadFile(mgr.FS(), file)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open target file: %w", err)
+			return nil, fmt.Errorf("failed to open target file: %s", err)
 		}
 		filename = file
 		code = string(codeBytes)
@@ -176,7 +190,7 @@ func newJavascriptProcessorFromConfig(conf *service.ParsedConfig, mgr *service.R
 
 	program, err := goja.Compile(filename, code, false)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile javascript code: %v", err)
+		return nil, fmt.Errorf("failed to compile javascript code: %s", err)
 	}
 
 	logger := mgr.Logger()

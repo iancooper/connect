@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package redis
 
 import (
@@ -38,9 +52,9 @@ output:
       content: ${!json("document.text")}
 `+"```"+`
 
-If the field `+"`walk_metadata`"+` is set to `+"`true`"+` then Benthos will walk all metadata fields of messages and add them to the list of hash fields to set.
+If the field `+"`walk_metadata`"+` is set to `+"`true`"+` then Redpanda Connect will walk all metadata fields of messages and add them to the list of hash fields to set.
 
-If the field `+"`walk_json_object`"+` is set to `+"`true`"+` then Benthos will walk each message as a JSON object, extracting keys and the string representation of their value and adds them to the list of hash fields to set.
+If the field `+"`walk_json_object`"+` is set to `+"`true`"+` then Redpanda Connect will walk each message as a JSON object, extracting keys and the string representation of their value and adds them to the list of hash fields to set.
 
 The order of hash field extraction is as follows:
 
@@ -54,7 +68,7 @@ Where latter stages will overwrite matching field names of a former stage.`+serv
 		Fields(
 			service.NewInterpolatedStringField(hoFieldKey).
 				Description("The key for each message, function interpolations should be used to create a unique key per message.").
-				Examples("${! @.kafka_key )}", "${! this.doc.id }", "${! count(\"msgs\") }"),
+				Examples("${! @.kafka_key )}", "${! this.doc.id }", "${! counter() }"),
 			service.NewBoolField(hoFieldWalkMetadata).
 				Description("Whether all metadata fields of messages should be walked and added to the list of hash fields to set.").
 				Default(false),

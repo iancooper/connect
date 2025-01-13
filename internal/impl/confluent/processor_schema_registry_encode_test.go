@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confluent
 
 import (
@@ -93,7 +107,7 @@ subject: foo
 
 			e, err := newSchemaRegistryEncoderFromConfig(conf, service.MockResources())
 			if e != nil {
-				assert.Equal(t, test.expectedBaseURL, e.client.schemaRegistryBaseURL.String())
+				assert.Equal(t, test.expectedBaseURL, e.client.SchemaRegistryBaseURL.String())
 			}
 
 			if err == nil {
@@ -120,13 +134,13 @@ func TestSchemaRegistryEncodeAvro(t *testing.T) {
 	require.NoError(t, err)
 
 	urlStr := runSchemaRegistryServer(t, func(path string) ([]byte, error) {
-		if path == "/subjects/foo/versions/latest" {
+		if path == "/subjects/foo%2Fbar/versions/latest" {
 			return fooFirst, nil
 		}
 		return nil, errors.New("nope")
 	})
 
-	subj, err := service.NewInterpolatedString("foo")
+	subj, err := service.NewInterpolatedString("foo/bar")
 	require.NoError(t, err)
 
 	encoder, err := newSchemaRegistryEncoder(urlStr, noopReqSign, nil, subj, false, time.Minute*10, time.Minute, service.MockResources())

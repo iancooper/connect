@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package azure
 
 import (
@@ -37,16 +51,20 @@ type bsiConfig struct {
 }
 
 func bsiConfigFromParsed(pConf *service.ParsedConfig) (conf bsiConfig, err error) {
-	if conf.Container, err = pConf.FieldString(bsiFieldContainer); err != nil {
+	var containerSASToken bool
+	container, err := pConf.FieldInterpolatedString(bsiFieldContainer)
+	if err != nil {
 		return
 	}
-	var containerSASToken bool
-	if conf.client, containerSASToken, err = blobStorageClientFromParsed(pConf, conf.Container); err != nil {
+	if conf.client, containerSASToken, err = blobStorageClientFromParsed(pConf, container); err != nil {
 		return
 	}
 	if containerSASToken {
-		// when using a container SAS token, the container is already implicit
-		conf.Container = ""
+		// if using a container SAS token, the container is already implicit
+		container, _ = service.NewInterpolatedString("")
+	}
+	if conf.Container, err = container.TryString(service.NewMessage([]byte(""))); err != nil {
+		return
 	}
 	if conf.Prefix, err = pConf.FieldString(bsiFieldPrefix); err != nil {
 		return
@@ -72,6 +90,7 @@ func bsiSpec() *service.ConfigSpec {
 		Summary(`Downloads objects within an Azure Blob Storage container, optionally filtered by a prefix.`).
 		Description(`
 Supports multiple authentication methods but only one of the following is required:
+
 - `+"`storage_connection_string`"+`
 - `+"`storage_account` and `storage_access_key`"+`
 - `+"`storage_account` and `storage_sas_token`"+`
@@ -88,13 +107,12 @@ When downloading large files it's often necessary to process it in streamed part
 
 == Stream new files
 
-By default this input will consume all files found within the target container and will then gracefully terminate. This is referred to as a "batch" mode of operation. However, it's possible to instead configure a container as https://learn.microsoft.com/en-gb/azure/event-grid/event-schema-blob-storage[an Event Grid source^] and then use this as a `+"<<targetsinput, `targets_input`>>"+`, in which case new files are consumed as they're uploaded and Benthos will continue listening for and downloading files as they arrive. This is referred to as a "streamed" mode of operation.
+By default this input will consume all files found within the target container and will then gracefully terminate. This is referred to as a "batch" mode of operation. However, it's possible to instead configure a container as https://learn.microsoft.com/en-gb/azure/event-grid/event-schema-blob-storage[an Event Grid source^] and then use this as a `+"<<targetsinput, `targets_input`>>"+`, in which case new files are consumed as they're uploaded and Redpanda Connect will continue listening for and downloading files as they arrive. This is referred to as a "streamed" mode of operation.
 
 == Metadata
 
 This input adds the following metadata fields to each message:
 
-`+"```"+`
 - blob_storage_key
 - blob_storage_container
 - blob_storage_last_modified
@@ -102,11 +120,10 @@ This input adds the following metadata fields to each message:
 - blob_storage_content_type
 - blob_storage_content_encoding
 - All user defined metadata
-`+"```"+`
 
 You can access these metadata fields using xref:configuration:interpolation.adoc#bloblang-queries[function interpolation].`).
 		Fields(
-			service.NewStringField(bsiFieldContainer).
+			service.NewInterpolatedStringField(bsiFieldContainer).
 				Description("The name of the container from which to download blobs."),
 			service.NewStringField(bsiFieldPrefix).
 				Description("An optional path prefix, if set only objects with the prefix are consumed.").
@@ -119,7 +136,7 @@ You can access these metadata fields using xref:configuration:interpolation.adoc
 				Advanced().
 				Default(false),
 			service.NewInputField(bsiFieldTargetsInput).
-				Description("EXPERIMENTAL: An optional source of download targets, configured as a xref:components:inputs/about.adoc[regular Benthos input]. Each message yielded by this input should be a single structured object containing a field `name`, which represents the blob to be downloaded.").
+				Description("EXPERIMENTAL: An optional source of download targets, configured as a xref:components:inputs/about.adoc[regular Redpanda Connect input]. Each message yielded by this input should be a single structured object containing a field `name`, which represents the blob to be downloaded.").
 				Optional().
 				Version("4.27.0").
 				Example(map[string]any{
@@ -230,6 +247,7 @@ func newAzureTargetReader(ctx context.Context, logger *service.Logger, conf bsiC
 		return newAzureTargetBatchReader(ctx, conf)
 	}
 	return &azureTargetStreamReader{
+		conf:  conf,
 		input: conf.FileReader,
 		log:   logger,
 	}, nil
@@ -239,6 +257,7 @@ func newAzureTargetReader(ctx context.Context, logger *service.Logger, conf bsiC
 
 type azureTargetStreamReader struct {
 	pending []*azureObjectTarget
+	conf    bsiConfig
 	input   *service.OwnedInput
 	log     *service.Logger
 }
@@ -295,6 +314,7 @@ func (a *azureTargetStreamReader) Pop(ctx context.Context) (*azureObjectTarget, 
 					} else {
 						ackOnce.Do(func() {
 							if atomic.AddInt32(&pendingAcks, -1) == 0 {
+								ackFn := deleteAzureObjectAckFn(a.conf.client, a.conf.Container, name, a.conf.DeleteObjects, ackFn)
 								aerr = ackFn(ctx, nil)
 							}
 						})
@@ -351,7 +371,6 @@ func newAzureTargetBatchReader(ctx context.Context, conf bsiConfig) (*azureTarge
 		}
 		staticKeys.pager = pager
 	}
-
 	return &staticKeys, nil
 }
 

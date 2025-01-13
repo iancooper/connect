@@ -25,15 +25,24 @@ jobs:
         go-version: 1.22.x
         check-latest: true
 
+    - name: Install dependencies for x_benthos_extra
+      run: |
+        sudo apt update -y
+        sudo apt install -y --no-install-recommends libzmq3-dev
+
     - name: Deps
       run: make deps && git diff-index --quiet HEAD || { >&2 echo "Stale go.{mod,sum} detected. This can be fixed with 'make deps'."; exit 1; }
 
-    # TODO
-    # - name: Docs
-    #   run: make docs && git diff-index --quiet HEAD || { >&2 echo "Stale docs detected. This can be fixed with 'make docs'."; exit 1; }
+    - name: Docs
+      run: CGO_ENABLED=1 make docs TAGS=x_benthos_extra && test -z "$(git ls-files --others --modified --exclude-standard)" || { >&2 echo "Stale docs detected. This can be fixed with 'make docs'."; exit 1; }
 
     - name: Test
       run: make test
+
+    - name: Fmt
+      run: |
+        go install golang.org/x/tools/cmd/goimports@latest
+        make fmt && test -z "$(git ls-files --others --modified --exclude-standard)" || { >&2 echo "Unformatted files detected. This can be fixed with 'make fmt'."; exit 1; }
 
   golangci-lint:
     if: ${{ github.repository == 'redpanda-data/connect' || github.event_name != 'schedule' }}
@@ -52,14 +61,40 @@ jobs:
         check-latest: true
 
     - name: Lint
-      uses: golangci/golangci-lint-action@v4
+      uses: golangci/golangci-lint-action@v6
       with:
-        version: v1.57.1
+        version: v1.61.0
         args: --timeout 30m cmd/... internal/... public/...
 
-    # TODO: Remove this after https://github.com/golangci/golangci-lint/issues/3094 is addressed
-    # - name: Get govulncheck
-    #   run: go install golang.org/x/vuln/cmd/govulncheck@latest
+  test-push-to-cloudsmith:
+    if: ${{ github.repository == 'redpanda-data/connect' || github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    steps:
 
-    # - name: Run govulncheck
-    #   run: govulncheck ./...
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Mock cloudsmith cli
+      run: |
+        echo '#!/bin/bash' >cloudsmith
+        echo "echo \$@" >>cloudsmith
+        chmod +x cloudsmith
+        mv cloudsmith /usr/local/bin/
+
+    - name: Test GA
+      env:
+        CLOUDSMITH_API_KEY: thisisatest
+      run: |
+        test $(./resources/scripts/push_pkg_to_cloudsmith.sh artifact.deb 0.0.0 \
+          | grep "push deb redpanda/redpanda/" | wc -l) -eq 1
+        test $(./resources/scripts/push_pkg_to_cloudsmith.sh artifact.deb v0.0.0 \
+          | grep "push deb redpanda/redpanda/" | wc -l) -eq 1
+
+    - name: Test RC
+      env:
+        CLOUDSMITH_API_KEY: thisisatest
+      run: |
+        test $(./resources/scripts/push_pkg_to_cloudsmith.sh artifact.deb 0.0.0-rc1 \
+          | grep "push deb redpanda/redpanda-unstable/" | wc -l) -eq 1
+        test $(./resources/scripts/push_pkg_to_cloudsmith.sh artifact.deb v0.0.0-rc1 \
+          | grep "push deb redpanda/redpanda-unstable/" | wc -l) -eq 1

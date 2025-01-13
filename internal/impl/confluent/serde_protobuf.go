@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confluent
 
 import (
@@ -7,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/twmb/franz-go/pkg/sr"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -18,11 +33,11 @@ import (
 	"github.com/redpanda-data/connect/v4/internal/impl/protobuf"
 )
 
-func (s *schemaRegistryDecoder) getProtobufDecoder(ctx context.Context, info schemaInfo) (schemaDecoder, error) {
+func (s *schemaRegistryDecoder) getProtobufDecoder(ctx context.Context, schema sr.Schema) (schemaDecoder, error) {
 	regMap := map[string]string{
-		".": info.Schema,
+		".": schema.Schema,
 	}
-	if err := s.client.WalkReferences(ctx, info.References, func(ctx context.Context, name string, si schemaInfo) error {
+	if err := s.client.WalkReferences(ctx, schema.References, func(ctx context.Context, name string, si sr.Schema) error {
 		regMap[name] = si.Schema
 		return nil
 	}); err != nil {
@@ -82,11 +97,11 @@ func (s *schemaRegistryDecoder) getProtobufDecoder(ctx context.Context, info sch
 	}, nil
 }
 
-func (s *schemaRegistryEncoder) getProtobufEncoder(ctx context.Context, info schemaInfo) (schemaEncoder, error) {
+func (s *schemaRegistryEncoder) getProtobufEncoder(ctx context.Context, schema sr.Schema) (schemaEncoder, error) {
 	regMap := map[string]string{
-		".": info.Schema,
+		".": schema.Schema,
 	}
-	if err := s.client.WalkReferences(ctx, info.References, func(ctx context.Context, name string, si schemaInfo) error {
+	if err := s.client.WalkReferences(ctx, schema.References, func(ctx context.Context, name string, si sr.Schema) error {
 		regMap[name] = si.Schema
 		return nil
 	}); err != nil {

@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package elasticsearch_test
 
 import (
@@ -148,7 +162,7 @@ func testElasticNoIndex(urls []string, client *elastic.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: does_not_exist
-id: 'foo-${!count("noIndexTest")}'
+id: 'foo-${!counter()}'
 urls: %v
 max_retries: 1
 backoff:
@@ -275,7 +289,7 @@ func testElasticConnect(urls []string, client *elastic.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: test_conn_index
-id: 'foo-${!count("foo")}'
+id: 'foo-${!counter()}'
 urls: %v
 type: _doc
 sniff: false
@@ -322,7 +336,7 @@ func testElasticIndexInterpolation(urls []string, client *elastic.Client, t *tes
 
 	m := outputFromConf(t, `
 index: ${! @index }
-id: 'bar-${!count("bar")}'
+id: 'bar-${!counter()}'
 urls: %v
 type: _doc
 sniff: false
@@ -368,7 +382,7 @@ func testElasticBatch(urls []string, client *elastic.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: ${! @index }
-id: 'baz-${!count("baz")}'
+id: 'baz-${!counter()}'
 urls: %v
 type: _doc
 sniff: false
@@ -415,7 +429,7 @@ func testElasticBatchDelete(urls []string, client *elastic.Client, t *testing.T)
 
 	m := outputFromConf(t, `
 index: ${! @index }
-id: 'buz-${!count("elasticBatchDeleteMessages")}'
+id: 'buz-${!counter()}'
 urls: %v
 action: ${! @elastic_action }
 type: _doc

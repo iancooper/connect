@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package couchbase
 
 import (
@@ -64,7 +78,7 @@ type Processor struct {
 
 // NewProcessor returns a Couchbase processor.
 func NewProcessor(conf *service.ParsedConfig, mgr *service.Resources) (*Processor, error) {
-	cl, err := getClient(conf, mgr)
+	cl, err := getClient(conf)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +133,11 @@ func (p *Processor) ProcessBatch(ctx context.Context, inBatch service.MessageBat
 	newMsg := inBatch.Copy()
 	ops := make([]gocb.BulkOp, len(inBatch))
 
+	var contentExec *service.MessageBatchBloblangExecutor
+	if p.content != nil {
+		contentExec = inBatch.BloblangExecutor(p.content)
+	}
+
 	// generate query
 	for index := range newMsg {
 		// generate id
@@ -129,8 +148,8 @@ func (p *Processor) ProcessBatch(ctx context.Context, inBatch service.MessageBat
 
 		// generate content
 		var content []byte
-		if p.content != nil {
-			res, err := inBatch.BloblangQuery(index, p.content)
+		if contentExec != nil {
+			res, err := contentExec.Query(index)
 			if err != nil {
 				return nil, err
 			}

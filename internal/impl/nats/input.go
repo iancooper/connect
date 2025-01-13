@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package nats
 
 import (
@@ -38,6 +52,9 @@ You can access these metadata fields using xref:configuration:interpolation.adoc
 			Description("An optional queue group to consume as.").
 			Optional()).
 		Field(service.NewAutoRetryNacksToggleField()).
+		Field(service.NewBoolField("send_ack").
+			Description("Control whether ACKS are sent as a reply to each message. When enabled, these replies are sent only once the data has been delivered to all outputs.").
+			Default(true)).
 		Field(service.NewDurationField("nak_delay").
 			Description("An optional delay duration on redelivering a message when negatively acknowledged.").
 			Example("1m").
@@ -79,6 +96,7 @@ type natsReader struct {
 	queue         string
 	prefetchCount int
 	nakDelay      time.Duration
+	sendAck       bool
 
 	log *service.Logger
 
@@ -107,6 +125,10 @@ func newNATSReader(conf *service.ParsedConfig, mgr *service.Resources) (*natsRea
 	}
 
 	if n.prefetchCount, err = conf.FieldInt("prefetch_count"); err != nil {
+		return nil, err
+	}
+
+	if n.sendAck, err = conf.FieldBool("send_ack"); err != nil {
 		return nil, err
 	}
 
@@ -215,7 +237,7 @@ func (n *natsReader) Read(ctx context.Context) (*service.Message, service.AckFun
 			} else {
 				ackErr = msg.Nak()
 			}
-		} else {
+		} else if n.sendAck {
 			ackErr = msg.Ack()
 		}
 		if errors.Is(ackErr, nats.ErrMsgNoReply) {

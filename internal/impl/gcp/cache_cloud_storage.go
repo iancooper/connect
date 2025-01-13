@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -7,6 +21,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
 )
@@ -19,7 +34,9 @@ func gcpCloudStorageCacheConfig() *service.ConfigSpec {
 		Field(service.NewStringField("bucket").
 			Description("The Google Cloud Storage bucket to store items in.")).
 		Field(service.NewStringField("content_type").
-			Description("Optional field to explicitly set the Content-Type.").Optional())
+			Description("Optional field to explicitly set the Content-Type.").Optional()).
+		Field(service.NewStringField("credentials_json").
+			Description("An optional field to set Google Service Account Credentials json.").Secret().Default(""))
 
 	return spec
 }
@@ -49,7 +66,19 @@ func newGcpCloudStorageCacheFromConfig(parsedConf *service.ParsedConfig) (*gcpCl
 		}
 	}
 
-	client, err := storage.NewClient(context.Background())
+	var opt []option.ClientOption
+	if parsedConf.Contains("credentials_json") {
+		credsJSON, err := parsedConf.FieldString("credentials_json")
+		if err != nil {
+			return nil, err
+		}
+		opt, err = getClientOptionWithCredential(credsJSON, opt)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	client, err := storage.NewClient(context.Background(), opt...)
 	if err != nil {
 		return nil, err
 	}

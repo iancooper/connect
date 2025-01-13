@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confluent
 
 import (
@@ -60,7 +74,7 @@ basic_auth:
 
 			e, err := newSchemaRegistryDecoderFromConfig(conf, service.MockResources())
 			if e != nil {
-				assert.Equal(t, test.expectedBaseURL, e.client.schemaRegistryBaseURL.String())
+				assert.Equal(t, test.expectedBaseURL, e.client.SchemaRegistryBaseURL.String())
 			}
 
 			if err == nil {
@@ -84,7 +98,7 @@ func runSchemaRegistryServer(t testing.TB, fn func(path string) ([]byte, error))
 		reqMut.Lock()
 		defer reqMut.Unlock()
 
-		b, err := fn(r.URL.Path)
+		b, err := fn(r.URL.EscapedPath())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -259,17 +273,17 @@ func TestSchemaRegistryDecodeAvro(t *testing.T) {
 		{
 			name:        "non-empty magic byte",
 			input:       "\x06\x00\x00\x00\x03\x06foo\x02\x06foo\x06bar",
-			errContains: "version number 6 not supported",
+			errContains: "5 byte header for value is missing or does not have 0 magic byte",
 		},
 		{
 			name:        "non-existing schema",
 			input:       "\x00\x00\x00\x00\x06\x06foo\x02\x06foo\x06bar",
-			errContains: "schema '6' not found by registry",
+			errContains: "schema 6 not found by registry: not found",
 		},
 		{
 			name:        "server fails",
 			input:       "\x00\x00\x00\x00\x05\x06foo\x02\x06foo\x06bar",
-			errContains: "request failed for schema '5'",
+			errContains: "schema 5 not found by registry: nope",
 		},
 	}
 
@@ -362,17 +376,17 @@ func TestSchemaRegistryDecodeAvroRawJson(t *testing.T) {
 		{
 			name:        "non-empty magic byte",
 			input:       "\x06\x00\x00\x00\x03\x06foo\x02\x06foo\x06bar",
-			errContains: "version number 6 not supported",
+			errContains: "5 byte header for value is missing or does not have 0 magic byte",
 		},
 		{
 			name:        "non-existing schema",
 			input:       "\x00\x00\x00\x00\x06\x06foo\x02\x06foo\x06bar",
-			errContains: "schema '6' not found by registry",
+			errContains: "schema 6 not found by registry: not found",
 		},
 		{
 			name:        "server fails",
 			input:       "\x00\x00\x00\x00\x05\x06foo\x02\x06foo\x06bar",
-			errContains: "request failed for schema '5'",
+			errContains: "schema 5 not found by registry: nope",
 		},
 	}
 

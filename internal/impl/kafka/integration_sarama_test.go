@@ -1,9 +1,22 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka_test
 
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -20,6 +33,8 @@ import (
 	"github.com/redpanda-data/connect/v4/internal/impl/kafka"
 )
 
+// TestIntegrationSaramaCheckpointOneLockUp checks that setting `checkpoint_limit: 1` on the `kafka` input doesn't lead to lockups.
+// Note: This test will take 10 minutes to complete unless you specify the `-timeout` flag explicitly. If you set `-timeout 0`, it will complete in a minute.
 func TestIntegrationSaramaCheckpointOneLockUp(t *testing.T) {
 	integration.CheckSkipExact(t)
 	t.Parallel()
@@ -35,15 +50,19 @@ func TestIntegrationSaramaCheckpointOneLockUp(t *testing.T) {
 	kafkaPortStr := strconv.Itoa(kafkaPort)
 
 	options := &dockertest.RunOptions{
-		Repository:   "docker.vectorized.io/vectorized/redpanda",
+		Repository:   "redpandadata/redpanda",
 		Tag:          "latest",
 		Hostname:     "redpanda",
-		ExposedPorts: []string{"9092"},
+		ExposedPorts: []string{"9092/tcp"},
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr}},
+			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr + "/tcp"}},
 		},
 		Cmd: []string{
-			"redpanda", "start", "--smp 1", "--overprovisioned", "",
+			"redpanda",
+			"start",
+			"--node-id 0",
+			"--mode dev-container",
+			"--set rpk.additional_start_flags=[--reactor-backend=epoll]",
 			"--kafka-addr 0.0.0.0:9092",
 			fmt.Sprintf("--advertise-kafka-addr localhost:%v", kafkaPort),
 		},
@@ -59,6 +78,7 @@ func TestIntegrationSaramaCheckpointOneLockUp(t *testing.T) {
 		return createKafkaTopic(context.Background(), "localhost:"+kafkaPortStr, "wcotesttopic", 20)
 	}))
 
+	// When the `-timeout` flag is not set explicitly, the default is 10 minutes: https://pkg.go.dev/cmd/go#hdr-Testing_flags
 	dl, exists := t.Deadline()
 	if exists {
 		dl = dl.Add(-time.Second)
@@ -193,15 +213,19 @@ func TestIntegrationSaramaRedpanda(t *testing.T) {
 	kafkaPortStr := strconv.Itoa(kafkaPort)
 
 	options := &dockertest.RunOptions{
-		Repository:   "docker.vectorized.io/vectorized/redpanda",
+		Repository:   "redpandadata/redpanda",
 		Tag:          "latest",
 		Hostname:     "redpanda",
-		ExposedPorts: []string{"9092"},
+		ExposedPorts: []string{"9092/tcp"},
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr}},
+			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr + "/tcp"}},
 		},
 		Cmd: []string{
-			"redpanda", "start", "--smp 1", "--overprovisioned", "",
+			"redpanda",
+			"start",
+			"--node-id 0",
+			"--mode dev-container",
+			"--set rpk.additional_start_flags=[--reactor-backend=epoll]",
 			"--kafka-addr 0.0.0.0:9092",
 			fmt.Sprintf("--advertise-kafka-addr localhost:%v", kafkaPort),
 		},
@@ -428,9 +452,6 @@ input:
 
 func TestIntegrationSaramaOld(t *testing.T) {
 	integration.CheckSkip(t)
-	if runtime.GOOS == "darwin" {
-		t.Skip("skipping test on macos")
-	}
 
 	t.Parallel()
 
@@ -447,9 +468,9 @@ func TestIntegrationSaramaOld(t *testing.T) {
 	kafkaResource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository:   "bitnami/kafka",
 		Tag:          "latest",
-		ExposedPorts: []string{"9092"},
+		ExposedPorts: []string{"9092/tcp"},
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr}},
+			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr + "/tcp"}},
 		},
 		Env: []string{
 			"KAFKA_CFG_NODE_ID=0",
@@ -640,4 +661,77 @@ input:
 			})
 		})
 	})
+}
+
+func TestIntegrationSaramaOutputFixedTimestamp(t *testing.T) {
+	integration.CheckSkip(t)
+	t.Parallel()
+
+	pool, err := dockertest.NewPool("")
+	require.NoError(t, err)
+
+	kafkaPort, err := integration.GetFreePort()
+	require.NoError(t, err)
+
+	kafkaPortStr := strconv.Itoa(kafkaPort)
+
+	options := &dockertest.RunOptions{
+		Repository:   "redpandadata/redpanda",
+		Tag:          "latest",
+		Hostname:     "redpanda",
+		ExposedPorts: []string{"9092/tcp"},
+		PortBindings: map[docker.Port][]docker.PortBinding{
+			"9092/tcp": {{HostIP: "", HostPort: kafkaPortStr + "/tcp"}},
+		},
+		Cmd: []string{
+			"redpanda",
+			"start",
+			"--node-id 0",
+			"--mode dev-container",
+			"--set rpk.additional_start_flags=[--reactor-backend=epoll]",
+			"--kafka-addr 0.0.0.0:9092",
+			fmt.Sprintf("--advertise-kafka-addr localhost:%v", kafkaPort),
+		},
+	}
+
+	pool.MaxWait = time.Minute
+	resource, err := pool.RunWithOptions(options)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, pool.Purge(resource))
+	})
+
+	_ = resource.Expire(900)
+	require.NoError(t, pool.Retry(func() error {
+		return createKafkaTopic(context.Background(), "localhost:"+kafkaPortStr, "testingconnection", 1)
+	}))
+
+	template := `
+output:
+  kafka:
+    addresses: [ localhost:$PORT ]
+    topic: topic-$ID
+    timestamp_ms: 1000000000000
+
+input:
+  kafka:
+    addresses: [ localhost:$PORT ]
+    topics: [ topic-$ID ]
+    consumer_group: "blobfish"
+  processors:
+    - mapping: |
+        root = if metadata("kafka_timestamp_ms") != 1000000000000 { "error: invalid timestamp" }
+`
+
+	suite := integration.StreamTests(
+		integration.StreamTestOpenCloseIsolated(),
+	)
+
+	suite.Run(
+		t, template,
+		integration.StreamTestOptPreTest(func(t testing.TB, ctx context.Context, vars *integration.StreamTestConfigVars) {
+			require.NoError(t, createKafkaTopic(ctx, "localhost:"+kafkaPortStr, vars.ID, 1))
+		}),
+		integration.StreamTestOptPort(kafkaPortStr),
+	)
 }

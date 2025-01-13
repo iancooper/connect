@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -24,7 +38,7 @@ func SQLiteBufferConfig() *service.ConfigSpec {
 		Categories("Utility").
 		Summary("Stores messages in an SQLite database and acknowledges them at the input level.").
 		Description(`
-Stored messages are then consumed as a stream from the database and deleted only once they are successfully sent at the output level. If the service is restarted Benthos will make a best attempt to finish delivering messages that are already read from the database, and when it starts again it will consume from the oldest message that has not yet been delivered.
+Stored messages are then consumed as a stream from the database and deleted only once they are successfully sent at the output level. If the service is restarted Redpanda Connect will make a best attempt to finish delivering messages that are already read from the database, and when it starts again it will consume from the oldest message that has not yet been delivered.
 
 == Delivery guarantees
 

@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package aws
 
 import (
@@ -31,15 +45,16 @@ const (
 	sqsoFieldDelaySeconds    = "delay_seconds"
 	sqsoFieldMetadata        = "metadata"
 	sqsoFieldBatching        = "batching"
-
-	sqsMaxRecordsCount = 10
+	sqsoFieldMaxRecordsCount = "max_records_per_request"
 )
 
 type sqsoConfig struct {
-	URL                    string
+	URL                    *service.InterpolatedString
 	MessageGroupID         *service.InterpolatedString
 	MessageDeduplicationID *service.InterpolatedString
 	DelaySeconds           *service.InterpolatedString
+
+	MaxRecordsCount int
 
 	Metadata    *service.MetadataExcludeFilter
 	aconf       aws.Config
@@ -47,7 +62,7 @@ type sqsoConfig struct {
 }
 
 func sqsoConfigFromParsed(pConf *service.ParsedConfig) (conf sqsoConfig, err error) {
-	if conf.URL, err = pConf.FieldString(sqsoFieldURL); err != nil {
+	if conf.URL, err = pConf.FieldInterpolatedString(sqsoFieldURL); err != nil {
 		return
 	}
 	if pConf.Contains(sqsoFieldMessageGroupID) {
@@ -74,6 +89,13 @@ func sqsoConfigFromParsed(pConf *service.ParsedConfig) (conf sqsoConfig, err err
 	if conf.backoffCtor, err = retries.CommonRetryBackOffCtorFromParsed(pConf); err != nil {
 		return
 	}
+	if conf.MaxRecordsCount, err = pConf.FieldInt(sqsoFieldMaxRecordsCount); err != nil {
+		return
+	}
+	if conf.MaxRecordsCount <= 0 || conf.MaxRecordsCount > 10 {
+		err = errors.New("field " + sqsoFieldMaxRecordsCount + " must be >0 and <= 10")
+		return
+	}
 	return
 }
 
@@ -90,9 +112,9 @@ The fields `+"`message_group_id`, `message_deduplication_id` and `delay_seconds`
 
 == Credentials
 
-By default Benthos will use a shared credentials file when connecting to AWS services. It's also possible to set them explicitly at the component level, allowing you to transfer data across accounts. You can find out more in xref:guides:cloud/aws.adoc[].`+service.OutputPerformanceDocs(true, true)).
+By default Redpanda Connect will use a shared credentials file when connecting to AWS services. It's also possible to set them explicitly at the component level, allowing you to transfer data across accounts. You can find out more in xref:guides:cloud/aws.adoc[].`+service.OutputPerformanceDocs(true, true)).
 		Fields(
-			service.NewStringField(sqsoFieldURL).Description("The URL of the target SQS queue."),
+			service.NewInterpolatedStringField(sqsoFieldURL).Description("The URL of the target SQS queue."),
 			service.NewInterpolatedStringField(sqsoFieldMessageGroupID).
 				Description("An optional group ID to set for messages.").
 				Optional(),
@@ -107,6 +129,11 @@ By default Benthos will use a shared credentials file when connecting to AWS ser
 			service.NewMetadataExcludeFilterField(snsoFieldMetadata).
 				Description("Specify criteria for which metadata values are sent as headers."),
 			service.NewBatchPolicyField(koFieldBatching),
+			service.NewIntField(sqsoFieldMaxRecordsCount).
+				Description("Customize the maximum number of records delivered in a single SQS request. This value must be greater than 0 but no greater than 10.").
+				Default(10).
+				LintRule(`if this <= 0 || this > 10 { "this field must be >0 and <=10" } `).
+				Advanced(),
 		).
 		Fields(config.SessionFields()...).
 		Fields(retries.CommonRetryBackOffFields(0, "1s", "5s", "30s")...)
@@ -256,8 +283,10 @@ func (a *sqsWriter) WriteBatch(ctx context.Context, batch service.MessageBatch) 
 
 	backOff := a.conf.backoffCtor()
 
-	entries := []types.SendMessageBatchRequestEntry{}
+	entries := map[string][]types.SendMessageBatchRequestEntry{}
 	attrMap := map[string]sqsAttributes{}
+
+	urlExecutor := batch.InterpolationExecutor(a.conf.URL)
 
 	for i := 0; i < len(batch); i++ {
 		id := strconv.Itoa(i)
@@ -268,7 +297,11 @@ func (a *sqsWriter) WriteBatch(ctx context.Context, batch service.MessageBatch) 
 
 		attrMap[id] = attrs
 
-		entries = append(entries, types.SendMessageBatchRequestEntry{
+		url, err := urlExecutor.TryString(i)
+		if err != nil {
+			return fmt.Errorf("error interpolating %s: %w", sqsoFieldURL, err)
+		}
+		entries[url] = append(entries[url], types.SendMessageBatchRequestEntry{
 			Id:                     &id,
 			MessageBody:            attrs.content,
 			MessageAttributes:      attrs.attrMap,
@@ -278,14 +311,31 @@ func (a *sqsWriter) WriteBatch(ctx context.Context, batch service.MessageBatch) 
 		})
 	}
 
+	for url, entries := range entries {
+		backOff.Reset()
+		if err := a.writeChunk(ctx, url, entries, attrMap, backOff); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *sqsWriter) writeChunk(
+	ctx context.Context,
+	url string,
+	entries []types.SendMessageBatchRequestEntry,
+	attrMap map[string]sqsAttributes,
+	backOff backoff.BackOff,
+) error {
 	input := &sqs.SendMessageBatchInput{
-		QueueUrl: aws.String(a.conf.URL),
+		QueueUrl: &url,
 		Entries:  entries,
 	}
 
 	// trim input length to max sqs batch size
-	if len(entries) > sqsMaxRecordsCount {
-		input.Entries, entries = entries[:sqsMaxRecordsCount], entries[sqsMaxRecordsCount:]
+	if len(entries) > a.conf.MaxRecordsCount {
+		input.Entries, entries = entries[:a.conf.MaxRecordsCount], entries[a.conf.MaxRecordsCount:]
 	} else {
 		entries = nil
 	}
@@ -348,8 +398,8 @@ func (a *sqsWriter) WriteBatch(ctx context.Context, batch service.MessageBatch) 
 
 		// add remaining records to batch
 		l := len(input.Entries)
-		if n := len(entries); n > 0 && l < sqsMaxRecordsCount {
-			if remaining := sqsMaxRecordsCount - l; remaining < n {
+		if n := len(entries); n > 0 && l < a.conf.MaxRecordsCount {
+			if remaining := a.conf.MaxRecordsCount - l; remaining < n {
 				input.Entries, entries = append(input.Entries, entries[:remaining]...), entries[remaining:]
 			} else {
 				input.Entries, entries = append(input.Entries, entries...), nil

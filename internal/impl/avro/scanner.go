@@ -1,8 +1,23 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package avro
 
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/linkedin/goavro/v2"
@@ -33,6 +48,8 @@ For example, the union schema ` + "`[\"null\",\"string\",\"Foo\"]`, where `Foo`"
 - a ` + "`Foo` instance as `{\"Foo\": {...}}`, where `{...}` indicates the JSON encoding of a `Foo`" + ` instance.
 
 However, it is possible to instead create documents in https://pkg.go.dev/github.com/linkedin/goavro/v2#NewCodecForStandardJSONFull[standard/raw JSON format^] by setting the field ` + "<<avro_raw_json,`avro_raw_json`>> to `true`" + `.
+
+This scanner also emits the canonical Avro schema as ` + "`@avro_schema`" + ` metadata, along with the schema's fingerprint available via ` + "`@avro_schema_fingerprint`" + `.
 `).
 		Fields(
 			service.NewBoolField(sFieldRawJSON).
@@ -101,16 +118,27 @@ func (c *avroScanner) NextBatch(ctx context.Context) (service.MessageBatch, erro
 		return nil, io.EOF
 	}
 
+	if !c.ocf.Scan() {
+		err := c.ocf.Err()
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan OCF file: %s", err)
+		}
+		return nil, io.EOF
+	}
+
 	datum, err := c.ocf.Read()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read OCF datum: %s", err)
 	}
 
 	jb, err := c.avroCodec.TextualFromNative(nil, datum)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode OCF datum to JSON: %s", err)
 	}
-	return service.MessageBatch{service.NewMessage(jb)}, nil
+	msg := service.NewMessage(jb)
+	msg.MetaSetMut("avro_schema", c.avroCodec.CanonicalSchema())
+	msg.MetaSetMut("avro_schema_fingerprint", c.avroCodec.Rabin)
+	return service.MessageBatch{msg}, nil
 }
 
 func (c *avroScanner) Close(ctx context.Context) error {

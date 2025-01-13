@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -97,7 +111,8 @@ type sqlRawProcessor struct {
 	queryDyn    *service.InterpolatedString
 	onlyExec    bool
 
-	argsMapping *bloblang.Executor
+	argsMapping   *bloblang.Executor
+	argsConverter argsConverter
 
 	logger  *service.Logger
 	shutSig *shutdown.Signaller
@@ -145,7 +160,15 @@ func NewSQLRawProcessorFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 	if err != nil {
 		return nil, err
 	}
-	return newSQLRawProcessor(mgr.Logger(), driverStr, dsnStr, queryStatic, queryDyn, onlyExec, argsMapping, connSettings)
+
+	var argsConverter argsConverter
+	if driverStr == "postgres" {
+		argsConverter = bloblValuesToPgSQLValues
+	} else {
+		argsConverter = func(v []any) []any { return v }
+	}
+
+	return newSQLRawProcessor(mgr.Logger(), driverStr, dsnStr, queryStatic, queryDyn, onlyExec, argsMapping, argsConverter, connSettings)
 }
 
 func newSQLRawProcessor(
@@ -155,15 +178,17 @@ func newSQLRawProcessor(
 	queryDyn *service.InterpolatedString,
 	onlyExec bool,
 	argsMapping *bloblang.Executor,
+	argsConverter argsConverter,
 	connSettings *connSettings,
 ) (*sqlRawProcessor, error) {
 	s := &sqlRawProcessor{
-		logger:      logger,
-		shutSig:     shutdown.NewSignaller(),
-		queryStatic: queryStatic,
-		queryDyn:    queryDyn,
-		onlyExec:    onlyExec,
-		argsMapping: argsMapping,
+		logger:        logger,
+		shutSig:       shutdown.NewSignaller(),
+		queryStatic:   queryStatic,
+		queryDyn:      queryDyn,
+		onlyExec:      onlyExec,
+		argsMapping:   argsMapping,
+		argsConverter: argsConverter,
 	}
 
 	var err error
@@ -188,11 +213,16 @@ func (s *sqlRawProcessor) ProcessBatch(ctx context.Context, batch service.Messag
 	s.dbMut.RLock()
 	defer s.dbMut.RUnlock()
 
+	var argsExec *service.MessageBatchBloblangExecutor
+	if s.argsMapping != nil {
+		argsExec = batch.BloblangExecutor(s.argsMapping)
+	}
+
 	batch = batch.Copy()
 	for i, msg := range batch {
 		var args []any
-		if s.argsMapping != nil {
-			resMsg, err := batch.BloblangQuery(i, s.argsMapping)
+		if argsExec != nil {
+			resMsg, err := argsExec.Query(i)
 			if err != nil {
 				s.logger.Debugf("Arguments mapping failed: %v", err)
 				msg.SetError(err)
@@ -212,6 +242,7 @@ func (s *sqlRawProcessor) ProcessBatch(ctx context.Context, batch service.Messag
 				msg.SetError(fmt.Errorf("mapping returned non-array result: %T", iargs))
 				continue
 			}
+			args = s.argsConverter(args)
 		}
 
 		queryStr := s.queryStatic

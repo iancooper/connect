@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package redis
 
 import (
@@ -17,7 +31,7 @@ import (
 func redisProcConfig() *service.ConfigSpec {
 	spec := service.NewConfigSpec().
 		Stable().
-		Summary(`Performs actions against Redis that aren't possible using a ` + "xef:components:processors/cache.adoc[`cache`]" + ` processor. Actions are
+		Summary(`Performs actions against Redis that aren't possible using a ` + "xref:components:processors/cache.adoc[`cache`]" + ` processor. Actions are
 performed for each message and the message contents are replaced with the result. In order to merge the result into the original message compose this processor within a ` + "xref:components:processors/branch.adoc[`branch` processor]" + `.`).
 		Categories("Integration")
 
@@ -307,8 +321,14 @@ func getRedisOperator(opStr string) (redisOperator, error) {
 	return nil, fmt.Errorf("operator not recognised: %v", opStr)
 }
 
-func (r *redisProc) execRaw(ctx context.Context, index int, inBatch service.MessageBatch, msg *service.Message) error {
-	resMsg, err := inBatch.BloblangQuery(index, r.argsMapping)
+func (r *redisProc) execRaw(
+	ctx context.Context,
+	index int,
+	argsExec *service.MessageBatchBloblangExecutor,
+	commandInterp *service.MessageBatchInterpolationExecutor,
+	msg *service.Message,
+) error {
+	resMsg, err := argsExec.Query(index)
 	if err != nil {
 		return fmt.Errorf("args mapping failed: %v", err)
 	}
@@ -335,7 +355,7 @@ func (r *redisProc) execRaw(ctx context.Context, index int, inBatch service.Mess
 		}
 	}
 
-	command, err := inBatch.TryInterpolatedString(index, r.command)
+	command, err := commandInterp.TryString(index)
 	if err != nil {
 		return fmt.Errorf("command interpolation error: %w", err)
 	}
@@ -370,8 +390,8 @@ func (r *redisProc) execRaw(ctx context.Context, index int, inBatch service.Mess
 
 func (r *redisProc) ProcessBatch(ctx context.Context, inBatch service.MessageBatch) ([]service.MessageBatch, error) {
 	newMsg := inBatch.Copy()
-	for index, part := range newMsg {
-		if r.operator != nil {
+	if r.operator != nil {
+		for index, part := range newMsg {
 			key, err := inBatch.TryInterpolatedString(index, r.key)
 			if err != nil {
 				r.log.Errorf("Key interpolation error: %v", err)
@@ -382,11 +402,16 @@ func (r *redisProc) ProcessBatch(ctx context.Context, inBatch service.MessageBat
 				r.log.Debugf("Operator failed for key '%s': %v", key, err)
 				part.SetError(fmt.Errorf("redis operator failed: %w", err))
 			}
-		} else {
-			if err := r.execRaw(ctx, index, inBatch, part); err != nil {
-				r.log.Debugf("Args mapping failed: %v", err)
-				part.SetError(err)
-			}
+		}
+		return []service.MessageBatch{newMsg}, nil
+	}
+
+	argsExec := inBatch.BloblangExecutor(r.argsMapping)
+	commandExec := inBatch.InterpolationExecutor(r.command)
+	for index, part := range newMsg {
+		if err := r.execRaw(ctx, index, argsExec, commandExec, part); err != nil {
+			r.log.Debugf("Args mapping failed: %v", err)
+			part.SetError(err)
 		}
 	}
 	return []service.MessageBatch{newMsg}, nil

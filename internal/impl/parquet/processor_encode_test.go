@@ -1,10 +1,26 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package parquet
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -368,4 +384,59 @@ func TestParquetEncodeProcessor(t *testing.T) {
 
 		assert.JSONEq(t, string(expectedBytes), string(actualBytes))
 	})
+}
+
+func TestParquetEncodeParallel(t *testing.T) {
+	encodeConf, err := parquetEncodeProcessorConfig().ParseYAML(`
+schema:
+  - { name: id, type: INT64 }
+  - { name: as, type: DOUBLE, repeated: true }
+  - { name: b, type: BYTE_ARRAY }
+  - { name: c, type: DOUBLE }
+  - { name: d, type: BOOLEAN }
+  - { name: e, type: INT64, optional: true }
+  - { name: f, type: INT64 }
+  - { name: g, type: UTF8 }
+  - name: nested_stuff
+    optional: true
+    fields:
+      - { name: a_stuff, type: BYTE_ARRAY }
+      - { name: b_stuff, type: BYTE_ARRAY }
+`, nil)
+	require.NoError(t, err)
+
+	encodeProc, err := newParquetEncodeProcessorFromConfig(encodeConf, nil)
+	require.NoError(t, err)
+
+	inBatch := service.MessageBatch{
+		service.NewMessage([]byte(`{
+	"id": 3,
+	"as": [ 0.1, 0.2, 0.3, 0.4 ],
+	"b": "hello world basic values",
+	"c": 0.5,
+	"d": true,
+	"e": 6,
+	"f": 7,
+	"g": "logical string represent",
+	"nested_stuff": {
+		"a_stuff": "a value",
+		"b_stuff": "b value"
+	},
+	"canary":"not in schema"
+}`)),
+	}
+
+	wg := sync.WaitGroup{}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		t.Run(fmt.Sprintf("iteration %d", i), func(t *testing.T) {
+			defer wg.Done()
+
+			encodedBatches, err := encodeProc.ProcessBatch(context.Background(), inBatch)
+			require.NoError(t, err)
+			require.Len(t, encodedBatches, 1)
+			require.Len(t, encodedBatches[0], 1)
+		})
+	}
+	wg.Wait()
 }

@@ -3,6 +3,320 @@ Changelog
 
 All notable changes to this project will be documented in this file.
 
+<!--
+
+## 4.46.0 - TBD
+
+### Added
+
+- New `mysql_cdc` input supporting change data capture (CDC) from MySQL. (@rockwotj, @le-vlad)
+
+-->
+
+## 4.45.0 - TBD
+
+### Added
+
+- `aws_sqs` now has a `max_outstanding` field to prevent unbounded memory usage. (@rockwotj)
+- `avro` scanner now emits metadata for the Avro schema it used along with the schema fingerprint. (@rockwotj)
+- Field `content_type` added to the `amqp_1` output. (@timo102)
+- `kafka_franz`, `ockam_kafka`, `redpanda`, `redpanda_common`, `redpanda_migrator` now support `fetch_max_wait` configuration field.
+- `snowpipe_streaming` now supports interpolating table names. (@rockwotj)
+- `snowpipe_streaming` now supports interpolating channel names. (@rockwotj)
+- `snowpipe_streaming` now supports exactly once delivery using `offset_token`. (@rockwotj)
+- `ollama_chat` now supports tool calling. (@rockwotj)
+- New `ollama_moderation` which allows using LlamaGuard or ShieldGemma to check if LLM responses are safe. (@rockwotj)
+
+### Fixed
+
+- The `code` and `file` fields on the `javascript` processor docs no longer erroneously mention interpolation support. (@mihaitodor)
+- The `postgres_cdc` now correctly handles `null` values. (@rockwotj)
+- Fix an issue in `aws_sqs` with refreshing in-flight message leases which could prevent acks from processed. (@rockwotj)
+- Fix an issue with `postgres_cdc` with TOAST values not being propagated with `REPLICA IDENTITY FULL`. (@rockwotj)
+- Fix a initial snapshot streaming consistency issue with `postgres_cdc`. (@rockwotj)
+
+## 4.44.0 - 2024-12-13
+
+### Added
+
+- Go API: New `public/license` package added to allow custom programmatic instantiations of Redpanda Connect to run enterprise license components. (@Jeffail)
+
+### Fixed
+
+- `gcp_bigquery` output with parquet format no longer returns errors incorrectly. (@rockwotj)
+- `postgres_cdc` input now allows quoted identifiers for the table names. (@mihaitodor, @rockwotj)
+
+## 4.43.1 - 2024-12-09
+
+### Fixed
+
+- Trial Redpanda Enterprise licenses are now considered valid. (@Jeffail)
+- The `redpanda_migrator_bundle` output now skips schema ID translation when `translate_schema_ids: false` and `schema_registry` is configured. (@mihaitodor)
+
+## 4.43.0 - 2024-12-05
+
+### Changed
+
+- The `pg_stream` input has been renamed to `postgres_cdc`. The old name will continue to function as an alias. (@rockwotj)
+- The `postgres_cdc` input no longer emits `mode` metadata and instead snapshot reads set `operation` metadata to be `read` instead of `insert`. (@rockwotj)
+
+### Fixed
+
+- The `redpanda_migrator_bundle` output no longer attempts to translate schema IDs when a schema registry is not configured. (@mihaitodor)
+
+## 4.42.0 - 2024-12-02
+
+### Added
+
+- Add support for `spanner` driver to SQL plugins. (@yufeng-deng)
+- Add support for complex database types (JSONB, TEXT[], INET, TSVECTOR, TSRANGE, POINT, INTEGER[]) for `pg_stream` input. (@le-vlad)
+- Add support for Parquet files to `bigquery` output (@rockwotj)
+- (Benthos) New `exists` operator added to the `cache` processor. (@mihaitodor)
+- New CLI flag `redpanda-license` added as an alternative way to specify a Redpanda license. (@Jeffail)
+
+### Fixed
+
+- Fixed `pg_stream` issue with discrepancies between replication and snapshot streaming for `UUID` type. (@le-vlad)
+- Fixed `avro` scanner bug introduced in v4.25.0. (@mihaitodor)
+
+### Changed
+
+- The `redpanda_migrator` output now registers destination schemas with all the subjects associated with the source schema ID extracted from each message. (@mihaitodor)
+- Enterprise features will now only run when a valid Redpanda license is present. More information can be found at [the licenses getting started guide](https://docs.redpanda.com/current/get-started/licenses/). (@Jeffail)
+
+## 4.41.0 - 2024-11-25
+
+### Added
+
+- Field `max_records_per_request` added to the `aws_sqs` output. (@Jeffail)
+
+### Fixed
+
+- (Benthos) Fixed an issue where running a CLI with a custom environment would cause imported templates to be rejected. (@Jeffail)
+
+### Changed
+
+- The `-cgo` suffixed docker images are no longer built and pushed along with the regular images. This decision was made due to low demand, and the unacceptable cadence with which the image base (Debian) receives security updates. It is still possible to create your own CGO builds with the command `CGO_ENABLED=1 make TAGS=x_benthos_extra redpanda-connect`. (@Jeffail)
+
+## 4.40.0 - 2024-11-21
+
+### Added
+
+- New `pg_stream` input supporting change data capture (CDC) from PostgreSQL. (@le-vlad)
+- Field `metadata_max_age` added to the `redpanda_migrator_offsets` output. (@mihaitodor)
+- Field `kafka_timestamp_ms` added to the `kafka`, `kafka_franz`, `redpanda`, `redpanda_common` and `redpanda_migrator` outputs. (@mihaitodor)
+- (Benthos) New Bloblang method `timestamp`. (@mihaitodor)
+- (Benthos) New `benchmark` processor. (@ooesili)
+
+### Fixed
+
+- Addresses an issue where `snowflake_streaming` could create more channels than configured. (@rockwotj)
+
+### Changed
+
+- The `snowflake_streaming` output with `schema_evolution.enabled` set to true can now autocreate tables. (@rockwotj)
+- Fields `translate_schema_ids` and `schema_registry_output_resource` added to the `redpanda_migrator` output. (@mihaitodor)
+- Fields `backfill_dependencies` and `input_resource` added to the `schema_registry` output. (@mihaitodor)
+- The `schema_registry` input and output and the `schema_registry_encode` and `schema_registry_decode` processors now use the `github.com/twmb/franz-go/pkg/sr` SchemaRegistry client. (@mihaitodor)
+- Metadata field `kafka_timestamp_ms` added to the `kafka`, `kafka_franz`, `redpanda`, `redpanda_common` and `redpanda_migrator` inputs now contains a unix timestamp with millisecond precision. (@mihaitodor)
+- Metadata field `kafka_timestamp` removed from the `kafka`, `kafka_franz`, `redpanda`, `redpanda_common` and `redpanda_migrator` inputs. (@mihaitodor)
+
+## 4.39.0 - 2024-11-07
+
+### Added
+
+- New `timeplus` input. (@ye11ow)
+- New `snowflake_streaming` output. (@rockwotj)
+- Redpanda Connect will now use an optional `/etc/redpanda/connector_list.yaml` config to determine which connectors are available to run. (@Jeffail)
+- (Benthos) Field `follow_redirects` added to the `http` processor. (@ooesili)
+- New CLI flag `--secrets` added. (@Jeffail)
+- New CLI flag `--disable-telemetry` added. (@Jeffail)
+- New experimental `spicedb` watch input. (@simon0191)
+- New `redpanda_common` input and output. (@Jeffail)
+- New `redpanda` input and output. (@Jeffail)
+- New `snowflake_streaming` output. (@rockwotj)
+
+### Fixed
+
+- The `kafka`, `kafka_franz` and `redpanda_migrator` outputs no longer waste CPU for large batches. (@rockwotj)
+
+### Changed
+
+- The `aws_sqs` output field `url` now supports interpolation functions. (@rockwotj)
+- (Benthos) CLI `--set` flags can now mutate array values indexed from the end via negative integers. E.g. `--set 'foo.-1=meow'` would set the last index of the array `foo` to the value of `meow`. (@Jeffail)
+
+## 4.38.0 - 2024-10-17
+
+### Added
+
+- Anonymous telemetry data is now sent by Connect instances after running for >5 mins. Details about which data is sent, when it is sent, and how to disable it can be found in the [telemetry README](./internal/telemetry/README.md). (@Jeffail)
+- Field `checksum_algorithm` added to the `aws_s3` output. (@dom-lee-naimuri)
+- Field `nkey` added to `nats`, `nats_jetstream`, `nats_kv` and `nats_stream` components. (@ye11ow)
+- Field `private_key` added to the `snowflake_put` output. (@mihaitodor)
+- New `azure_data_lake_gen2` output. (@ooesili)
+- New `timeplus` output. (@ye11ow)
+
+### Fixed
+
+- The `elasticsearch` output now performs retries for HTTP status code `429` (Too Many Requests). (@kahoowkh)
+- The docs for the `collection` field of the `mongodb` output now specify support for interpolation functions. (@mihaitodor)
+
+### Changed
+
+- All components with a default `path` field value (such as the `aws_s3` output) containing the deprecated function `count` have now been changed to use the new function `counter`. This could potentially change behaviour in cases where multiple components are executing a mapping with a `count` function sharing the same of the old default count, and these counters need to cascade. This is an extremely unlikely scenario, but for all users of these components it is recommended that your `path` is defined explicitly, and in a future major version we will be removing the defaults.
+
+## 4.37.0 - 2024-09-26
+
+### Added
+
+- New experimental `gcp_vertex_ai_embeddings` processor. (@rockwotj)
+- New experimental `aws_bedrock_embeddings` processor. (@rockwotj)
+- New experimental `cohere_chat` and `cohere_embeddings` processors. (@rockwotj)
+- New experimental `questdb` output. (@sklarsa)
+- Field `metadata_max_age` added to the `kafka_franz` input. (@Scarjit)
+- Field `metadata_max_age` added to the `kafka_migrator` input. (@mihaitodor)
+- New experimental `cypher` output. (@rockwotj)
+- New experimental `couchbase` output. (@rockwotj)
+- Field `fetch_in_order` added to the `schema_registry` input. (@mihaitodor)
+
+### Fixed
+
+- Fixed a bug with the `input_resource` field for the `kafka_migrator` output where new topics weren't created as expected. (@mihaitodor)
+- Fixed a bug in the `kafka_migrator` input which could lead to extra duplicate messages during a consumer group rebalance. (@mihaitodor)
+- `kafka_migrator`, `kafka_migrator_offsets` and `kafka_migrator_bundle` components renamed to `redpanda_migrator`, `redpanda_migrator_offsets` and `redpanda_migrator_bundle` (@mihaitodor)
+
+### Fixed
+
+- Fixes a panic in the `parquet_encode` processor (@mihaitodor)
+
+## 4.36.0 - 2024-09-11
+
+### Added
+
+- Fields `replication_factor` and `replication_factor_override` added to the `kafka_migrator` input and output. (@mihaitodor)
+
+### Fixed
+
+- The `schema_registry_encode` and `schema_registry_decode` processors no longer unescape path separators in the schema name. (@Mizaro)
+- (Benthos) The `switch` output metrics now emit the case id as part of their labels. This is a regression introduced in v4.25.0. (@mihaitodor)
+- (Benthos) Fixed a bug where certain logs used the `%w` verb to print errors resulting in incorrect output. (@mihaitodor)
+- (Benthos) The logger no longer tries to replace Go fmt verbs in log messages. (@mihaitodor)
+
+## 4.35.1 - 2024-09-06
+
+### Added
+
+- Azure and GCP components added to cloud builds. (@Jeffail)
+
+### Fixed
+
+- The `kafka_migrator_bundle` input and output no longer require schema registry to be configured. (@mihaitodor)
+
+## 4.35.0 - 2024-09-05
+
+### Added
+
+- Auth fields added to the `schema_registry` input and output. (@mihaitodor)
+- New experimental `kafka_migrator` and `kafka_migrator_bundle` inputs and outputs. (@mihaitodor)
+- New experimental `kafka_migrator_offsets` output. (@mihaitodor)
+- Field `job_project` added to the `gcp_bigquery` output. (@Roviluca)
+
+## 4.34.0 - 2024-08-29
+
+### Fixed
+
+- The `schema_registry` output now allows pushing schemas if the target Schema Registry instance is in `IMPORT` mode. (@mihaitodor)
+- Fixed an issue where the `azure_blob_storage` input would fail to delete blobs when using `targets_input` with `delete_objects: true`. (@mihaitodor)
+- New experimental `gcp_vertex_ai_chat` processor. (@rockwotj)
+- New experimental `aws_bedrock_chat` processor. (@rockwotj)
+
+## 4.33.0 - 2024-08-13
+
+### Added
+
+- Field `content_md5` added to the `aws_s3` output. (@dom-lee-naimuri)
+- Field `send_ack` added to the `nats` input. (@plejd-sebman)
+- New Bloblang method `vector`. (@rockwotj)
+- New experimental `ockam_kafka` input and output. (@mrinalwadhwa, @davide-baldo)
+- Field `credentials_json` added to all GCP components. (@tomasz-sadura)
+- (Benthos) The `list` subcommand now supports the format `jsonschema`. (@Jeffail)
+- New experimental `schema_registry` input and output. (@mihaitodor)
+- New experimental `qdrant` output. (@Anush008)
+- (Benthos) The `--set` run flag now supports structured values, e.g. `--set input={}`. (@Jeffail)
+
+## 4.32.1 - 2024-07-24
+
+### Changed
+
+- The number of release build artifacts for the `community` and `cloud` flavours have been reduced due to Github Action Runner disk space limitations.
+
+## 4.32.0 - 2024-07-24
+
+### Added
+
+- Field `app_name` added to the MongoDB components. (@mihaitodor)
+- New `openai_chat_completion` processor. (@rockwotj)
+- New `openai_embeddings` processor. (@rockwotj)
+- New `openai_image_generation` processor. (@rockwotj)
+- New `openai_speech` processor. (@rockwotj)
+- New `openai_transcription` processor. (@rockwotj)
+- New `openai_translation` processor. (@rockwotj)
+- New `ollama_chat` processor. (@rockwotj)
+- New `ollama_embeddings` processor. (@rockwotj)
+
+### Changed
+
+- The `gcp_pubsub` output now rejects messages with metadata values which contain invalid UTF-8-encoded runes. (@AndreasBergmeier6176)
+- The `.goreleaser.yml` configuration has been set back to version 1. (@Jeffail)
+
+## 4.31.0 - 2024-07-19
+
+### Added
+
+- The `splunk` input and `splunk_hec` output now support custom `tls` configuration. (@mihaitodor)
+- Field `timestamp` added to the `kafka` and `kafka_franz` outputs. (@mihaitodor)
+- (Benthos) Field `max_retries` added to the `retry` processor. (@mihaitodor)
+- (Benthos) Metadata fields `retry_count` and `backoff_duration` added to the `retry` processor. (@mihaitodor)
+- (Benthos) Parameter `escape_html` added to the `format_json()` Bloblang method. (@mihaitodor)
+- (Benthos) New `array` bloblang method. (@gramian)
+- (Benthos) Algorithm `fnv32` added to the `hash` bloblang method. (@CallMeMhz)
+- New experimental `redpanda_data_transform`. (@rockwotj)
+- New `-community` suffixed build included in release artifacts, containing only FOSS functionality. (@Jeffail)
+- New `-cloud` suffixed build included in release artifacts, containing components enabled in Redpanda Cloud. (@Jeffail)
+- Field `status_topic` added to the global `redpanda` config block. (@Jeffail)
+- New `pinecone` output. (@rockwotj)
+- (Benthos) The `/ready` endpoint in regular operation now provides a detailed summary of all inputs and outputs, including connection errors where applicable. (@Jeffail)
+
+### Changed
+
+- (Benthos) All cli subcommands that previously relied on root-level flags (`streams`, `lint`, `test`, `echo`) now explicitly define those flags such that they appear in help-text and can be specified _after_ the subcommand itself. This means previous commands such as `connect -r ./foo.yaml streams ./bar.yaml` can now be more intuitively written as `connect streams -r ./foo.yaml ./bar.yaml` and so on. The old style will still work in order to preserve backwards compatibility, but the help-text for these root-level flags has been hidden. (@Jeffail)
+
+## 4.30.1 - 2024-06-13
+
+### Fixed
+
+- AWS Lambda serverless build artifacts have been added back to official releases.
+
+## 4.30.0 - 2024-06-13
+
+### Added
+
+- (Benthos) Field `omit_empty` added to the `lines` scanner. (@mihaitodor)
+- (Benthos) New scheme `gcm` added to the `encrypt_aes` and `decrypy_aes` Bloblang methods. (@abergmeier)
+- (Benthos) New Bloblang method `pow`. (@mfamador)
+- (Benthos) New `sin`, `cos`, `tan` and `pi` bloblang methods. (@mfamador)
+- (Benthos) Field `proxy_url` added to the `websocket` input and output. (@mihaitodor)
+- New experimental `splunk` input. (@mihaitodor)
+
+### Fixed
+
+- The `sql_insert` and `sql_raw` components no longer fail when inserting large binary blobs into Oracle `BLOB` columns. (@mihaitodor)
+- (Benthos) The `websocket` input and output now obey the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` environment variables. (@mihaitodor)
+
+### Changed
+
+- The `splunk_hec` output is now implemented as a native Go component. (@mihaitodor)
+
 ## 4.29.0 - 2024-06-04
 
 ### Added

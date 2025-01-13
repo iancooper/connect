@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package azure
 
 import (
@@ -11,7 +25,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
+	"path"
 	"strconv"
 	"testing"
 	"time"
@@ -81,7 +95,7 @@ output:
     blob_type: BLOCK
     container: $VAR1-$ID
     max_in_flight: 1
-    path: $VAR2/${!count("$ID")}.txt
+    path: $VAR2/${!counter()}.txt
     public_access_level: PRIVATE
     storage_connection_string: $VAR3
 
@@ -109,7 +123,7 @@ output:
     blob_type: BLOCK
     container: $VAR1-$ID
     max_in_flight: 1
-    path: $VAR2/${!count("$ID")}.txt
+    path: $VAR2/${!counter()}.txt
     public_access_level: PRIVATE
     storage_connection_string: $VAR3
 
@@ -135,6 +149,66 @@ input:
 			integration.StreamTestOptVarSet("VAR2", dummyPrefix),
 			integration.StreamTestOptVarSet("VAR3", connString),
 		)
+	})
+
+	t.Run("blob_storage_streamed_delete_file", func(t *testing.T) {
+		template := `
+output:
+  azure_blob_storage:
+    blob_type: BLOCK
+    container: $VAR1
+    max_in_flight: 1
+    path: $VAR2/$VAR4
+    public_access_level: PRIVATE
+    storage_connection_string: $VAR3
+
+input:
+  azure_blob_storage:
+    container: $VAR1
+    prefix: $VAR2
+    storage_connection_string: $VAR3
+    delete_objects: true
+    targets_input:
+      azure_blob_storage:
+        container: $VAR1
+        prefix: $VAR2
+        storage_connection_string: $VAR3
+      processors:
+        - mapping: 'root.name = @blob_storage_key'
+`
+
+		u4, err := uuid.NewV4()
+		require.NoError(t, err)
+		dummyContainer := u4.String()
+		dummyFile := "ginnungagap.txt"
+
+		// This is a bit gross, but by pushing `integration.StreamTests()` into a subtest we force them to run before
+		// asserting the that the container is empty below. This is necessary because `integration.StreamTests()` calls
+		// `t.Parallel()`.
+		t.Run("exec_stream_tests", func(t *testing.T) {
+			integration.StreamTests(
+				integration.StreamTestOpenCloseIsolated(),
+			).Run(
+				t, template,
+				integration.StreamTestOptVarSet("VAR1", dummyContainer),
+				integration.StreamTestOptVarSet("VAR2", dummyPrefix),
+				integration.StreamTestOptVarSet("VAR3", connString),
+				integration.StreamTestOptVarSet("VAR4", dummyFile),
+			)
+		})
+
+		client, err := azblob.NewClientFromConnectionString(connString, nil)
+		require.NoError(t, err)
+
+		ctx, done := context.WithTimeout(context.Background(), 1*time.Second)
+		defer done()
+
+		file := path.Join(dummyPrefix, dummyFile)
+		pager := client.NewListBlobsFlatPager(dummyContainer, &azblob.ListBlobsFlatOptions{Prefix: &file})
+		require.True(t, pager.More())
+		page, err := pager.NextPage(ctx)
+		require.NoError(t, err)
+		require.Empty(t, page.Segment.BlobItems)
 	})
 
 	t.Run("blob_storage_append", func(t *testing.T) {
@@ -177,9 +251,9 @@ input:
 		)
 	})
 
-	os.Setenv("AZURITE_QUEUE_ENDPOINT_PORT", resource.GetPort("10001/tcp")) //nolint: tenv // this test runs in parallel
-	dummyQueue := "foo"
 	t.Run("queue_storage", func(t *testing.T) {
+		dummyQueue := "foo"
+
 		template := `
 output:
   azure_queue_storage:

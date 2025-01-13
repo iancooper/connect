@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hdfs
 
 import (
@@ -10,12 +24,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	_ "github.com/redpanda-data/benthos/v4/public/components/pure"
 	"github.com/redpanda-data/benthos/v4/public/service/integration"
 )
 
 func TestIntegrationHDFS(t *testing.T) {
 	integration.CheckSkip(t)
-	// t.Skip() // Skip until we fix the static port bindings
+
 	t.Parallel()
 
 	pool, err := dockertest.NewPool("")
@@ -27,12 +42,12 @@ func TestIntegrationHDFS(t *testing.T) {
 		Repository:   "cybermaggedon/hadoop",
 		Tag:          "2.8.2",
 		Hostname:     "localhost",
-		ExposedPorts: []string{"9000", "50075", "50070", "50010"},
+		ExposedPorts: []string{"9000/tcp", "50075/tcp", "50070/tcp", "50010/tcp"},
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9000/tcp":  {{HostIP: "", HostPort: "9000"}},
-			"50070/tcp": {{HostIP: "", HostPort: "50070"}},
-			"50075/tcp": {{HostIP: "", HostPort: "50075"}},
-			"50010/tcp": {{HostIP: "", HostPort: "50010"}},
+			"9000/tcp":  {{HostIP: "", HostPort: "9000/tcp"}},
+			"50070/tcp": {{HostIP: "", HostPort: "50070/tcp"}},
+			"50075/tcp": {{HostIP: "", HostPort: "50075/tcp"}},
+			"50010/tcp": {{HostIP: "", HostPort: "50010/tcp"}},
 		},
 	}
 	resource, err := pool.RunWithOptions(options)
@@ -73,7 +88,7 @@ output:
     hosts: [ localhost:9000 ]
     user: root
     directory: /$ID
-    path: ${!count("$ID")}-${!timestamp_unix_nano()}.txt
+    path: ${!counter()}-${!timestamp_unix_nano()}.txt
     max_in_flight: $MAX_IN_FLIGHT
     batching:
       count: $OUTPUT_BATCH_COUNT

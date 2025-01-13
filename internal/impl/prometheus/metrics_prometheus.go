@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package prometheus
 
 import (
@@ -41,9 +55,9 @@ func configSpec() *service.ConfigSpec {
 		Footnotes(`
 == Push gateway
 
-The field `+"`push_url`"+` is optional and when set will trigger a push of metrics to a https://prometheus.io/docs/instrumenting/pushing/[Prometheus Push Gateway^] once Benthos shuts down. It is also possible to specify a `+"`push_interval`"+` which results in periodic pushes.
+The field `+"`push_url`"+` is optional and when set will trigger a push of metrics to a https://prometheus.io/docs/instrumenting/pushing/[Prometheus Push Gateway^] once Redpanda Connect shuts down. It is also possible to specify a `+"`push_interval`"+` which results in periodic pushes.
 
-The Push Gateway is useful for when Benthos instances are short lived. Do not include the "/metrics/jobs/..." path in the push URL.
+The Push Gateway is useful for when Redpanda Connect instances are short lived. Do not include the "/metrics/jobs/..." path in the push URL.
 
 If the Push Gateway requires HTTP Basic Authentication it can be configured with `+"`push_basic_auth`.").
 		Fields(
@@ -66,24 +80,24 @@ If the Push Gateway requires HTTP Basic Authentication it can be configured with
 					Default(0.0),
 			).
 				Description("A list of timing metrics summary buckets (as quantiles). Applicable when `use_histogram_timing` is set to `false`.").
-				Example([]map[string]float64{
-					{"quantile": 0.5, "error": 0.05},
-					{"quantile": 0.9, "error": 0.01},
-					{"quantile": 0.99, "error": 0.001},
+				Example([]any{
+					map[string]any{"quantile": 0.5, "error": 0.05},
+					map[string]any{"quantile": 0.9, "error": 0.01},
+					map[string]any{"quantile": 0.99, "error": 0.001},
 				}).
 				Advanced().
 				Version("4.23.0").
-				Default([]map[string]float64{
-					{"quantile": 0.5, "error": 0.05},
-					{"quantile": 0.9, "error": 0.01},
-					{"quantile": 0.99, "error": 0.001},
+				Default([]any{
+					map[string]any{"quantile": 0.5, "error": 0.05},
+					map[string]any{"quantile": 0.9, "error": 0.01},
+					map[string]any{"quantile": 0.99, "error": 0.001},
 				}),
 			service.NewBoolField(pmFieldAddProcessMetrics).
-				Description("Whether to export process metrics such as CPU and memory usage in addition to Benthos metrics.").
+				Description("Whether to export process metrics such as CPU and memory usage in addition to Redpanda Connect metrics.").
 				Advanced().
 				Default(false),
 			service.NewBoolField(pmFieldAddGoMetrics).
-				Description("Whether to export Go runtime metrics such as GC pauses in addition to Benthos metrics.").
+				Description("Whether to export Go runtime metrics such as GC pauses in addition to Redpanda Connect metrics.").
 				Advanced().
 				Default(false),
 			service.NewURLField(pmFieldPushURL).

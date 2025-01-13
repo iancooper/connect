@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka
 
 import (
@@ -53,16 +67,15 @@ Batching messages before processing can be enabled using the `+"<<batching,`batc
 
 This input adds the following metadata fields to each message:
 
-`+"```text"+`
 - kafka_key
 - kafka_topic
 - kafka_partition
 - kafka_offset
 - kafka_lag
+- kafka_timestamp_ms
 - kafka_timestamp_unix
 - kafka_tombstone_message
 - All existing message headers (version 0.11+)
-`+"```"+`
 
 The field `+"`kafka_lag`"+` is the calculated difference between the high water mark offset of the partition at the time of ingestion and the current message offset.
 
@@ -242,7 +255,7 @@ func newKafkaReaderFromParsed(conf *service.ParsedConfig, mgr *service.Resources
 		return nil, errors.New("must specify at least one topic in the topics field")
 	}
 
-	balancedTopics, topicPartitions, err := parseTopics(topics, -1, false)
+	balancedTopics, topicPartitions, err := ParseTopics(topics, -1, false)
 	if err != nil {
 		return nil, err
 	}
@@ -405,6 +418,7 @@ func dataToPart(highestOffset int64, data *sarama.ConsumerMessage, multiHeader b
 	part.MetaSetMut("kafka_topic", data.Topic)
 	part.MetaSetMut("kafka_offset", int(data.Offset))
 	part.MetaSetMut("kafka_lag", lag)
+	part.MetaSetMut("kafka_timestamp_ms", data.Timestamp.UnixMilli())
 	part.MetaSetMut("kafka_timestamp_unix", data.Timestamp.Unix())
 	part.MetaSetMut("kafka_tombstone_message", data.Value == nil)
 
@@ -514,7 +528,7 @@ func (k *kafkaReader) Connect(ctx context.Context) error {
 	if len(k.topicPartitions) > 0 {
 		return k.connectExplicitTopics(ctx, k.saramConf)
 	}
-	return k.connectBalancedTopics(ctx, k.saramConf)
+	return k.connectBalancedTopics(k.saramConf)
 }
 
 // ReadBatch attempts to read a message from a kafkaReader topic.

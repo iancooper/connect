@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -35,6 +49,7 @@ func TestPubSubOutput(t *testing.T) {
 
 	client.On("Topic", "test_foo").Return(fooTopic).Once()
 	client.On("Topic", "test_bar").Return(barTopic).Once()
+	client.On("Close").Return(nil).Once()
 
 	fooMsgA := service.NewMessage([]byte("foo_a"))
 	fooResA := &mockPublishResult{}
@@ -79,7 +94,7 @@ func TestPubSubOutput_MessageAttr(t *testing.T) {
 	conf, err := newPubSubOutputConfig().ParseYAML(`
     project: sample-project
     topic: test
-    ordering_key: '${! content().string() }_${! count(content().string()) }'
+    ordering_key: '${! content().string() }_${! counter() }'
     metadata:
       exclude_prefixes:
         - drop_
@@ -100,6 +115,7 @@ func TestPubSubOutput_MessageAttr(t *testing.T) {
 	fooTopic.On("Publish", "foo", mock.AnythingOfType("*pubsub.Message")).Return(fooMsgA).Once()
 
 	client.On("Topic", "test").Return(fooTopic).Once()
+	client.On("Close").Return(nil).Once()
 
 	out, err := newPubSubOutput(conf)
 	require.NoError(t, err, "failed to create output")
@@ -155,6 +171,7 @@ func TestPubSubOutput_MissingTopic(t *testing.T) {
 
 	client.On("Topic", "test_foo").Return(fooTopic).Once()
 	client.On("Topic", "test_bar").Return(barTopic).Once()
+	client.On("Close").Return(nil).Once()
 
 	out, err := newPubSubOutput(conf)
 	require.NoError(t, err, "failed to create output")
@@ -226,6 +243,7 @@ func TestPubSubOutput_PublishErrors(t *testing.T) {
 
 	client.On("Topic", "test_foo").Return(fooTopic).Once()
 	client.On("Topic", "test_bar").Return(barTopic).Once()
+	client.On("Close").Return(nil).Once()
 
 	fooMsgA := service.NewMessage([]byte("foo_a"))
 	fooResA := &mockPublishResult{}

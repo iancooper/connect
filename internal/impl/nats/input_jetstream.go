@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package nats
 
 import (
@@ -46,15 +60,18 @@ xref:configuration:interpolation.adoc#bloblang-queries[function interpolation].
 ` + connectionNameDescription() + authDescription()).
 		Fields(connectionHeadFields()...).
 		Field(service.NewStringField("queue").
-			Description("An optional queue group to consume as.").
+			Description("An optional queue group to consume as. Used to configure a push consumer.").
 			Optional()).
 		Field(service.NewStringField("subject").
 			Description("A subject to consume from. Supports wildcards for consuming multiple subjects. Either a subject or stream must be specified.").
 			Optional().
 			Example("foo.bar.baz").Example("foo.*.baz").Example("foo.bar.*").Example("foo.>")).
 		Field(service.NewStringField("durable").
-			Description("Preserve the state of your consumer under a durable name.").
+			Description("Preserve the state of your consumer under a durable name. Used to configure a pull consumer.").
 			Optional()).
+		LintRule(`root = match {
+			this.exists("queue") && this.queue != "" && this.exists("durable") && this.durable != "" => [ "both 'queue' and 'durable' can't be set simultaneously" ],
+			}`).
 		Field(service.NewStringField("stream").
 			Description("A stream to consume from. Either a subject or stream must be specified.").
 			Optional()).
@@ -163,6 +180,9 @@ func newJetStreamReaderFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 		if j.durable, err = conf.FieldString("durable"); err != nil {
 			return nil, err
 		}
+	}
+	if j.queue != "" && j.durable != "" {
+		return nil, errors.New("both 'queue' and 'durable' cannot be set simultaneously")
 	}
 
 	if conf.Contains("stream") {

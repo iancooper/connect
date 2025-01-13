@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -90,7 +104,8 @@ type sqlRawOutput struct {
 	queryStatic string
 	queryDyn    *service.InterpolatedString
 
-	argsMapping *bloblang.Executor
+	argsMapping   *bloblang.Executor
+	argsConverter argsConverter
 
 	connSettings *connSettings
 
@@ -134,7 +149,15 @@ func newSQLRawOutputFromConfig(conf *service.ParsedConfig, mgr *service.Resource
 	if err != nil {
 		return nil, err
 	}
-	return newSQLRawOutput(mgr.Logger(), driverStr, dsnStr, queryStatic, queryDyn, argsMapping, connSettings), nil
+
+	var argsConverter argsConverter
+	if driverStr == "postgres" {
+		argsConverter = bloblValuesToPgSQLValues
+	} else {
+		argsConverter = func(v []any) []any { return v }
+	}
+
+	return newSQLRawOutput(mgr.Logger(), driverStr, dsnStr, queryStatic, queryDyn, argsMapping, argsConverter, connSettings), nil
 }
 
 func newSQLRawOutput(
@@ -143,17 +166,19 @@ func newSQLRawOutput(
 	queryStatic string,
 	queryDyn *service.InterpolatedString,
 	argsMapping *bloblang.Executor,
+	argsConverter argsConverter,
 	connSettings *connSettings,
 ) *sqlRawOutput {
 	return &sqlRawOutput{
-		logger:       logger,
-		shutSig:      shutdown.NewSignaller(),
-		driver:       driverStr,
-		dsn:          dsnStr,
-		queryStatic:  queryStatic,
-		queryDyn:     queryDyn,
-		argsMapping:  argsMapping,
-		connSettings: connSettings,
+		logger:        logger,
+		shutSig:       shutdown.NewSignaller(),
+		driver:        driverStr,
+		dsn:           dsnStr,
+		queryStatic:   queryStatic,
+		queryDyn:      queryDyn,
+		argsMapping:   argsMapping,
+		argsConverter: argsConverter,
+		connSettings:  connSettings,
 	}
 }
 
@@ -188,10 +213,15 @@ func (s *sqlRawOutput) WriteBatch(ctx context.Context, batch service.MessageBatc
 	s.dbMut.RLock()
 	defer s.dbMut.RUnlock()
 
+	var argsExec *service.MessageBatchBloblangExecutor
+	if s.argsMapping != nil {
+		argsExec = batch.BloblangExecutor(s.argsMapping)
+	}
+
 	for i := range batch {
 		var args []any
-		if s.argsMapping != nil {
-			resMsg, err := batch.BloblangQuery(i, s.argsMapping)
+		if argsExec != nil {
+			resMsg, err := argsExec.Query(i)
 			if err != nil {
 				return err
 			}

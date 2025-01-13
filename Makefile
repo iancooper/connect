@@ -1,4 +1,4 @@
-.PHONY: all serverless deps docker docker-cgo clean docs test test-race test-integration fmt lint install deploy-docs
+.PHONY: all deps docker clean test test-race test-integration fmt lint install
 
 TAGS ?=
 
@@ -7,10 +7,7 @@ INSTALL_DIR        ?= $(GOPATH)/bin
 WEBSITE_DIR        ?= ./docs/modules
 DEST_DIR           ?= ./target
 PATHINSTBIN        = $(DEST_DIR)/bin
-PATHINSTTOOLS      = $(DEST_DIR)/tools
-PATHINSTSERVERLESS = $(DEST_DIR)/serverless
-PATHINSTDOCKER     = $(DEST_DIR)/docker
-DOCKER_IMAGE       ?= ghcr.io/redpanda-data/connect
+DOCKER_IMAGE       ?= docker.redpanda.com/redpandadata/connect
 
 VERSION   := $(shell git describe --tags 2> /dev/null || echo "v0.0.0")
 VER_CUT   := $(shell echo $(VERSION) | cut -c2-)
@@ -26,7 +23,7 @@ LD_FLAGS   ?= -w -s
 GO_FLAGS   ?=
 DOCS_FLAGS ?=
 
-APPS = redpanda-connect
+APPS = redpanda-connect redpanda-connect-cloud redpanda-connect-community redpanda-connect-ai
 all: $(APPS)
 
 install: $(APPS)
@@ -45,40 +42,23 @@ $(PATHINSTBIN)/%: $(SOURCE_FILES)
 
 $(APPS): %: $(PATHINSTBIN)/%
 
-# TOOLS = redpanda-docs TODO
-# tools: $(TOOLS)
-
-$(PATHINSTTOOLS)/%: $(SOURCE_FILES)
-	@go build $(GO_FLAGS) -tags "$(TAGS)" -ldflags "$(LD_FLAGS) $(VER_FLAGS)" -o $@ ./cmd/tools/$*
-
-$(TOOLS): %: $(PATHINSTTOOLS)/%
-
-# SERVERLESS = redpanda-connect-lambda TODO
-# serverless: $(SERVERLESS)
-
-$(PATHINSTSERVERLESS)/%: $(SOURCE_FILES)
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-		go build $(GO_FLAGS) -tags "$(TAGS)" -ldflags "$(LD_FLAGS) $(VER_FLAGS)" -o $@ ./cmd/serverless/$*
-	@zip -m -j $@.zip $@
-
-$(SERVERLESS): %: $(PATHINSTSERVERLESS)/%
-
 docker-tags:
 	@echo "latest,$(VER_CUT),$(VER_MAJOR).$(VER_MINOR),$(VER_MAJOR)" > .tags
 
 docker-rc-tags:
 	@echo "latest,$(VER_CUT),$(VER_MAJOR)-$(VER_RC)" > .tags
 
-docker-cgo-tags:
-	@echo "latest-cgo,$(VER_CUT)-cgo,$(VER_MAJOR).$(VER_MINOR)-cgo,$(VER_MAJOR)-cgo" > .tags
-
 docker:
 	@docker build -f ./resources/docker/Dockerfile . -t $(DOCKER_IMAGE):$(VER_CUT)
 	@docker tag $(DOCKER_IMAGE):$(VER_CUT) $(DOCKER_IMAGE):latest
 
-docker-cgo:
-	@docker build -f ./resources/docker/Dockerfile.cgo . -t $(DOCKER_IMAGE):$(VER_CUT)-cgo
-	@docker tag $(DOCKER_IMAGE):$(VER_CUT)-cgo $(DOCKER_IMAGE):latest-cgo
+docker-cloud:
+	@docker build -f ./resources/docker/Dockerfile.cloud . -t $(DOCKER_IMAGE):$(VER_CUT)-cloud
+	@docker tag $(DOCKER_IMAGE):$(VER_CUT)-cloud $(DOCKER_IMAGE):latest-cloud
+
+docker-ai:
+	@docker build -f ./resources/docker/Dockerfile.ai . -t $(DOCKER_IMAGE):$(VER_CUT)-ai
+	@docker tag $(DOCKER_IMAGE):$(VER_CUT)-ai $(DOCKER_IMAGE):latest-ai
 
 fmt:
 	@go list -f {{.Dir}} ./... | xargs -I{} gofmt -w -s {}
@@ -104,11 +84,10 @@ test-integration:
 clean:
 	rm -rf $(PATHINSTBIN)
 	rm -rf $(DEST_DIR)/dist
-	rm -rf $(DEST_DIR)/tools
-	rm -rf $(DEST_DIR)/serverless
-	rm -rf $(PATHINSTDOCKER)
 
-docs: $(APPS) $(TOOLS) # TODO: Add docs generation back in
+docs: $(APPS) $(TOOLS)
+	@go run -tags "$(TAGS)" ./cmd/tools/docs_gen
+	@go run -tags "$(TAGS)" ./cmd/tools/plugins_csv_fmt
 	@$(PATHINSTBIN)/redpanda-connect lint --deprecated "./config/examples/*.yaml" \
 		"$(WEBSITE_DIR)/**/*.md"
 	@$(PATHINSTBIN)/redpanda-connect template lint "./config/template_examples/*.yaml"

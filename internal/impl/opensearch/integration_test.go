@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package opensearch_test
 
 import (
@@ -36,7 +50,7 @@ func outputFromConf(t testing.TB, confStr string, args ...any) *opensearch.Outpu
 	return o
 }
 
-func TestIntegration(t *testing.T) {
+func TestIntegrationOpensearch(t *testing.T) {
 	integration.CheckSkip(t)
 	t.Parallel()
 
@@ -117,7 +131,7 @@ func TestIntegration(t *testing.T) {
 	})
 
 	t.Run("TestOpenSearchErrorHandling", func(te *testing.T) {
-		testOpenSearchErrorHandling(urls, client, te)
+		testOpenSearchErrorHandling(urls, te)
 	})
 
 	t.Run("TestOpenSearchConnect", func(te *testing.T) {
@@ -147,7 +161,7 @@ func testOpenSearchNoIndex(urls []string, client *os.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: does_not_exist
-id: 'foo-${!count("noIndexTest")}'
+id: 'foo-${!counter()}'
 urls: %v
 action: index
 `, urls)
@@ -238,7 +252,7 @@ action: index
 	}
 }
 
-func testOpenSearchErrorHandling(urls []string, client *os.Client, t *testing.T) {
+func testOpenSearchErrorHandling(urls []string, t *testing.T) {
 	ctx, done := context.WithTimeout(context.Background(), time.Second*30)
 	defer done()
 
@@ -270,7 +284,7 @@ func testOpenSearchConnect(urls []string, client *os.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: test_conn_index
-id: 'foo-${!count("foo")}'
+id: 'foo-${!counter()}'
 urls: %v
 action: index
 `, urls)
@@ -311,7 +325,7 @@ func testOpenSearchIndexInterpolation(urls []string, client *os.Client, t *testi
 
 	m := outputFromConf(t, `
 index: ${! @index }
-id: 'bar-${!count("bar")}'
+id: 'bar-${!counter()}'
 urls: %v
 action: index
 `, urls)
@@ -351,7 +365,7 @@ func testOpenSearchBatch(urls []string, client *os.Client, t *testing.T) {
 
 	m := outputFromConf(t, `
 index: ${! @index }
-id: 'baz-${!count("baz")}'
+id: 'baz-${!counter()}'
 urls: %v
 action: index
 `, urls)

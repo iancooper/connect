@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -41,6 +55,11 @@ func sqlInsertOutputConfig() *service.ConfigSpec {
 			Optional().
 			Advanced().
 			Example("ON CONFLICT (name) DO NOTHING")).
+		Field(service.NewStringListField("options").
+			Description("A list of keyword options to add before the INTO clause of the query.").
+			Optional().
+			Advanced().
+			Example([]string{"DELAYED", "IGNORE"})).
 		Field(service.NewIntField("max_in_flight").
 			Description("The maximum number of inserts to run in parallel.").
 			Default(64))
@@ -99,8 +118,9 @@ type sqlInsertOutput struct {
 	builder squirrel.InsertBuilder
 	dbMut   sync.RWMutex
 
-	useTxStmt   bool
-	argsMapping *bloblang.Executor
+	useTxStmt     bool
+	argsMapping   *bloblang.Executor
+	argsConverter argsConverter
 
 	connSettings *connSettings
 
@@ -153,6 +173,12 @@ func newSQLInsertOutputFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 		s.builder = s.builder.PlaceholderFormat(squirrel.Colon)
 	}
 
+	if s.driver == "postgres" {
+		s.argsConverter = bloblValuesToPgSQLValues
+	} else {
+		s.argsConverter = func(v []any) []any { return v }
+	}
+
 	if s.useTxStmt {
 		values := make([]any, 0, len(columns))
 		for _, c := range columns {
@@ -175,6 +201,14 @@ func newSQLInsertOutputFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 			return nil, err
 		}
 		s.builder = s.builder.Suffix(suffixStr)
+	}
+
+	if conf.Contains("options") {
+		options, err := conf.FieldStringList("options")
+		if err != nil {
+			return nil, err
+		}
+		s.builder = s.builder.Options(options...)
 	}
 
 	if s.connSettings, err = connSettingsFromParsed(conf, mgr); err != nil {
@@ -233,10 +267,14 @@ func (s *sqlInsertOutput) WriteBatch(ctx context.Context, batch service.MessageB
 		}
 	}
 
+	var argsExec *service.MessageBatchBloblangExecutor
+	if s.argsMapping != nil {
+		argsExec = batch.BloblangExecutor(s.argsMapping)
+	}
 	for i := range batch {
 		var args []any
-		if s.argsMapping != nil {
-			resMsg, err := batch.BloblangQuery(i, s.argsMapping)
+		if argsExec != nil {
+			resMsg, err := argsExec.Query(i)
 			if err != nil {
 				return err
 			}
@@ -250,6 +288,7 @@ func (s *sqlInsertOutput) WriteBatch(ctx context.Context, batch service.MessageB
 			if args, ok = iargs.([]any); !ok {
 				return fmt.Errorf("mapping returned non-array result: %T", iargs)
 			}
+			args = s.argsConverter(args)
 		}
 
 		if tx == nil {

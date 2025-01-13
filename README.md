@@ -47,7 +47,7 @@ AWS (DynamoDB, Kinesis, S3, SQS, SNS), Azure (Blob storage, Queue storage, Table
 
 If you want to dive fully into Redpanda Connect then don't waste your time in this dump, check out the [documentation site][general-docs].
 
-For guidance on building your own custom plugins in Go check out [the public APIs.][godoc-url]
+For guidance on building your own custom plugins in Go check out [the public APIs](https://pkg.go.dev/github.com/redpanda-data/benthos/v4/public/service).
 
 ## Install
 
@@ -67,7 +67,7 @@ brew install redpanda-data/tap/redpanda
 Or pull the docker image:
 
 ```shell
-docker pull docker.redpanda.com/redpandadata/redpanda
+docker pull docker.redpanda.com/redpandadata/connect
 ```
 
 For more information check out the [getting started guide][getting-started].
@@ -82,10 +82,10 @@ Or, with docker:
 
 ```shell
 # Using a config file
-docker run --rm -v /path/to/your/config.yaml:/connect.yaml docker.redpanda.com/redpandadata/redpanda connect run
+docker run --rm -v /path/to/your/config.yaml:/connect.yaml docker.redpanda.com/redpandadata/connect run
 
 # Using a series of -s flags
-docker run --rm -p 4195:4195 docker.redpanda.com/redpandadata/redpanda connect run \
+docker run --rm -p 4195:4195 docker.redpanda.com/redpandadata/connect run \
   -s "input.type=http_server" \
   -s "output.type=kafka" \
   -s "output.kafka.addresses=kafka-server:9092" \
@@ -165,12 +165,19 @@ docker run --rm \
 	-v /path/to/your/benthos.yaml:/config.yaml \
 	-v /tmp/data:/data \
 	-p 4195:4195 \
-	redpanda-connect -c /config.yaml
+	docker.redpanda.com/redpandadata/connect run /config.yaml
 ```
 
 ## Contributing
 
-Contributions are welcome, please [read the guidelines](CONTRIBUTING.md).
+Contributions are welcome! To prevent CI errors, please always make sure a pull request has been:
+
+- Unit tested with `make test`
+- Linted with `make lint`
+- Formatted with `make fmt`
+
+Note: most integration tests need to spin up Docker containers, so they are skipped by `make test`. You can trigger
+them individually via `go test -run "^Test.*Integration.*$" ./internal/impl/<connector directory>/...`.
 
 [inputs]: https://docs.redpanda.com/redpanda-connect/components/inputs/about
 [about-categories]: https://docs.redpanda.com/redpanda-connect/about#components

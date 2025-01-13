@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package aws
 
 import (
@@ -26,17 +40,11 @@ func createBucket(ctx context.Context, s3Port, bucket string) error {
 	conf, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion("eu-west-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("xxxxx", "xxxxx", "xxxxx")),
-		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				PartitionID:   "aws",
-				URL:           endpoint,
-				SigningRegion: "eu-west-1",
-			}, nil
-		})),
 	)
 	if err != nil {
 		return err
 	}
+	conf.BaseEndpoint = &endpoint
 
 	client := s3.NewFromConfig(conf, func(o *s3.Options) {
 		o.UsePathStyle = true
@@ -76,17 +84,11 @@ func createBucketQueue(ctx context.Context, s3Port, sqsPort, id string) error {
 		conf, err := config.LoadDefaultConfig(ctx,
 			config.WithRegion("eu-west-1"),
 			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("xxxxx", "xxxxx", "xxxxx")),
-			config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-				return aws.Endpoint{
-					PartitionID:   "aws",
-					URL:           endpoint,
-					SigningRegion: "eu-west-1",
-				}, nil
-			})),
 		)
 		if err != nil {
 			return err
 		}
+		conf.BaseEndpoint = &endpoint
 
 		s3Client = s3.NewFromConfig(conf, func(o *s3.Options) {
 			o.UsePathStyle = true
@@ -179,7 +181,7 @@ output:
     endpoint: http://localhost:$PORT
     force_path_style_urls: true
     region: eu-west-1
-    path: ${!count("$ID")}.txt
+    path: ${!counter()}.txt
     credentials:
       id: xxxxx
       secret: xxxxx
@@ -230,7 +232,7 @@ output:
     endpoint: http://localhost:$PORT
     force_path_style_urls: true
     region: eu-west-1
-    path: ${!count("$ID")}.txt
+    path: ${!counter()}.txt
     credentials:
       id: xxxxx
       secret: xxxxx
@@ -285,7 +287,7 @@ output:
     endpoint: http://localhost:$PORT
     force_path_style_urls: true
     region: eu-west-1
-    path: ${!count("$ID")}.txt
+    path: ${!counter()}.txt
     credentials:
       id: xxxxx
       secret: xxxxx
@@ -340,7 +342,7 @@ output:
     endpoint: http://localhost:$PORT
     force_path_style_urls: true
     region: eu-west-1
-    path: ${!count("$ID")}.txt
+    path: ${!counter()}.txt
     credentials:
       id: xxxxx
       secret: xxxxx

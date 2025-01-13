@@ -1,11 +1,23 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confluent
 
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"sync"
@@ -13,8 +25,11 @@ import (
 	"time"
 
 	"github.com/Jeffail/shutdown"
+	franz_sr "github.com/twmb/franz-go/pkg/sr"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
+
+	"github.com/redpanda-data/connect/v4/internal/impl/confluent/sr"
 )
 
 func schemaRegistryDecoderConfig() *service.ConfigSpec {
@@ -73,7 +88,7 @@ func init() {
 
 type schemaRegistryDecoder struct {
 	avroRawJSON bool
-	client      *schemaRegistryClient
+	client      *sr.Client
 
 	schemas    map[int]*cachedSchemaDecoder
 	cacheMut   sync.RWMutex
@@ -119,7 +134,7 @@ func newSchemaRegistryDecoder(
 		mgr:         mgr,
 	}
 	var err error
-	if s.client, err = newSchemaRegistryClient(urlStr, reqSigner, tlsConf, mgr); err != nil {
+	if s.client, err = sr.NewClient(urlStr, reqSigner, tlsConf, mgr); err != nil {
 		return nil, err
 	}
 
@@ -142,7 +157,8 @@ func (s *schemaRegistryDecoder) Process(ctx context.Context, msg *service.Messag
 		return nil, errors.New("unable to reference message as bytes")
 	}
 
-	id, remaining, err := extractID(b)
+	var ch franz_sr.ConfluentHeader
+	id, remaining, err := ch.DecodeID(b)
 	if err != nil {
 		return nil, err
 	}
@@ -180,20 +196,6 @@ type schemaDecoder func(m *service.Message) error
 type cachedSchemaDecoder struct {
 	lastUsedUnixSeconds int64
 	decoder             schemaDecoder
-}
-
-func extractID(b []byte) (id int, remaining []byte, err error) {
-	if len(b) == 0 {
-		err = errors.New("message is empty")
-		return
-	}
-	if b[0] != 0 {
-		err = fmt.Errorf("serialization format version number %v not supported", b[0])
-		return
-	}
-	id = int(binary.BigEndian.Uint32(b[1:5]))
-	remaining = b[5:]
-	return
 }
 
 const (
@@ -251,21 +253,19 @@ func (s *schemaRegistryDecoder) getDecoder(id int) (schemaDecoder, error) {
 	ctx, done := context.WithTimeout(context.Background(), time.Second*5)
 	defer done()
 
-	resPayload, err := s.client.GetSchemaByID(ctx, id)
+	resPayload, err := s.client.GetSchemaByID(ctx, id, false)
 	if err != nil {
 		return nil, err
 	}
 
 	var decoder schemaDecoder
 	switch resPayload.Type {
-	case "PROTOBUF":
+	case franz_sr.TypeProtobuf:
 		decoder, err = s.getProtobufDecoder(ctx, resPayload)
-	case "", "AVRO":
-		decoder, err = s.getAvroDecoder(ctx, resPayload)
-	case "JSON":
+	case franz_sr.TypeJSON:
 		decoder, err = s.getJSONDecoder(ctx, resPayload)
 	default:
-		err = fmt.Errorf("schema type %v not supported", resPayload.Type)
+		decoder, err = s.getAvroDecoder(ctx, resPayload)
 	}
 	if err != nil {
 		return nil, err

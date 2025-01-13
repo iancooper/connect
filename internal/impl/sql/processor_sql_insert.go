@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -42,7 +56,12 @@ If the insert fails to execute then the message will still remain unchanged and 
 			Description("An optional suffix to append to the insert query.").
 			Optional().
 			Advanced().
-			Example("ON CONFLICT (name) DO NOTHING"))
+			Example("ON CONFLICT (name) DO NOTHING")).
+		Field(service.NewStringListField("options").
+			Description("A list of keyword options to add before the INTO clause of the query.").
+			Optional().
+			Advanced().
+			Example([]string{"DELAYED", "IGNORE"}))
 
 	for _, f := range connFields() {
 		spec = spec.Field(f)
@@ -89,8 +108,9 @@ type sqlInsertProcessor struct {
 	builder squirrel.InsertBuilder
 	dbMut   sync.RWMutex
 
-	useTxStmt   bool
-	argsMapping *bloblang.Executor
+	useTxStmt     bool
+	argsMapping   *bloblang.Executor
+	argsConverter argsConverter
 
 	logger  *service.Logger
 	shutSig *shutdown.Signaller
@@ -142,6 +162,12 @@ func NewSQLInsertProcessorFromConfig(conf *service.ParsedConfig, mgr *service.Re
 		s.builder = s.builder.PlaceholderFormat(squirrel.Colon)
 	}
 
+	if driverStr == "postgres" {
+		s.argsConverter = bloblValuesToPgSQLValues
+	} else {
+		s.argsConverter = func(v []any) []any { return v }
+	}
+
 	if s.useTxStmt {
 		values := make([]any, 0, len(columns))
 		for _, c := range columns {
@@ -164,6 +190,14 @@ func NewSQLInsertProcessorFromConfig(conf *service.ParsedConfig, mgr *service.Re
 			return nil, err
 		}
 		s.builder = s.builder.Suffix(suffixStr)
+	}
+
+	if conf.Contains("options") {
+		options, err := conf.FieldStringList("options")
+		if err != nil {
+			return nil, err
+		}
+		s.builder = s.builder.Options(options...)
 	}
 
 	connSettings, err := connSettingsFromParsed(conf, mgr)
@@ -212,10 +246,15 @@ func (s *sqlInsertProcessor) ProcessBatch(ctx context.Context, batch service.Mes
 		}
 	}
 
+	var argsExec *service.MessageBatchBloblangExecutor
+	if s.argsMapping != nil {
+		argsExec = batch.BloblangExecutor(s.argsMapping)
+	}
+
 	for i, msg := range batch {
 		var args []any
-		if s.argsMapping != nil {
-			resMsg, err := batch.BloblangQuery(i, s.argsMapping)
+		if argsExec != nil {
+			resMsg, err := argsExec.Query(i)
 			if err != nil {
 				s.logger.Debugf("Arguments mapping failed: %v", err)
 				msg.SetError(err)
@@ -235,6 +274,7 @@ func (s *sqlInsertProcessor) ProcessBatch(ctx context.Context, batch service.Mes
 				msg.SetError(fmt.Errorf("mapping returned non-array result: %T", iargs))
 				continue
 			}
+			args = s.argsConverter(args)
 		}
 
 		if tx == nil {

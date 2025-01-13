@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mongodb
 
 import (
@@ -28,7 +42,7 @@ func outputSpec() *service.ConfigSpec {
 		Description(service.OutputPerformanceDocs(true, true)).
 		Fields(clientFields()...).
 		Fields(
-			service.NewStringField(moFieldCollection).
+			service.NewInterpolatedStringField(moFieldCollection).
 				Description("The name of the target collection."),
 			outputOperationDocs(OperationUpdateOne),
 			writeConcernDocs(),
@@ -123,6 +137,7 @@ func (m *outputWriter) WriteBatch(ctx context.Context, batch service.MessageBatc
 	}
 
 	writeModelsMap := map[string][]mongo.WriteModel{}
+	wmExec := m.writeMaps.exec(batch)
 
 	err := batch.WalkWithBatchedErrors(func(i int, _ *service.Message) error {
 		var err error
@@ -132,7 +147,7 @@ func (m *outputWriter) WriteBatch(ctx context.Context, batch service.MessageBatc
 			return fmt.Errorf("collection interpolation error: %w", err)
 		}
 
-		docJSON, filterJSON, hintJSON, err := m.writeMaps.extractFromMessage(m.operation, i, batch)
+		docJSON, filterJSON, hintJSON, err := wmExec.extractFromMessage(m.operation, i)
 		if err != nil {
 			return err
 		}

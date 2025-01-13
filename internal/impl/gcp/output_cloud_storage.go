@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -11,6 +25,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/gofrs/uuid"
 	"go.uber.org/multierr"
+	"google.golang.org/api/option"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
 )
@@ -26,6 +41,7 @@ const (
 	csoFieldBatching        = "batching"
 	csoFieldCollisionMode   = "collision_mode"
 	csoFieldTimeout         = "timeout"
+	csoFieldCredentialsJSON = "credentials_json"
 
 	// GCPCloudStorageErrorIfExistsCollisionMode - error-if-exists.
 	GCPCloudStorageErrorIfExistsCollisionMode = "error-if-exists"
@@ -48,6 +64,7 @@ type csoConfig struct {
 	ChunkSize       int
 	CollisionMode   string
 	Timeout         time.Duration
+	CredentialsJSON string
 }
 
 func csoConfigFromParsed(pConf *service.ParsedConfig) (conf csoConfig, err error) {
@@ -72,6 +89,9 @@ func csoConfigFromParsed(pConf *service.ParsedConfig) (conf csoConfig, err error
 	if conf.Timeout, err = pConf.FieldDuration(csoFieldTimeout); err != nil {
 		return
 	}
+	if conf.CredentialsJSON, err = pConf.FieldString(csoFieldCredentialsJSON); err != nil {
+		return
+	}
 	return
 }
 
@@ -90,7 +110,7 @@ Metadata fields on messages will be sent as headers, in order to mutate these va
 
 == Credentials
 
-By default Benthos will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].
+By default Redpanda Connect will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].
 
 == Batching
 
@@ -102,7 +122,7 @@ For example, if we wished to upload messages as a .tar.gz archive of documents w
 output:
   gcp_cloud_storage:
     bucket: TODO
-    path: ${!count("files")}-${!timestamp_unix_nano()}.tar.gz
+    path: ${!counter()}-${!timestamp_unix_nano()}.tar.gz
     batching:
       count: 100
       period: 10s
@@ -119,7 +139,7 @@ Alternatively, if we wished to upload JSON documents as a single large document 
 output:
   gcp_cloud_storage:
     bucket: TODO
-    path: ${!count("files")}-${!timestamp_unix_nano()}.json
+    path: ${!counter()}-${!timestamp_unix_nano()}.json
     batching:
       count: 100
       processors:
@@ -131,10 +151,10 @@ output:
 				Description("The bucket to upload messages to."),
 			service.NewInterpolatedStringField(csoFieldPath).
 				Description("The path of each message to upload.").
-				Example(`${!count("files")}-${!timestamp_unix_nano()}.txt`).
+				Example(`${!counter()}-${!timestamp_unix_nano()}.txt`).
 				Example(`${!meta("kafka_key")}.json`).
 				Example(`${!json("doc.namespace")}/${!json("doc.id")}.json`).
-				Default(`${!count("files")}-${!timestamp_unix_nano()}.txt`),
+				Default(`${!counter()}-${!timestamp_unix_nano()}.txt`),
 			service.NewInterpolatedStringField(csoFieldContentType).
 				Description("The content type to set for each object.").
 				Default("application/octet-stream"),
@@ -160,6 +180,10 @@ output:
 				Example("1s").
 				Example("500ms").
 				Default("3s"),
+			service.NewInterpolatedStringField(csoFieldCredentialsJSON).
+				Description("An optional field to set Google Service Account Credentials json.").
+				Default("").
+				Secret(),
 			service.NewOutputMaxInFlightField().
 				Description("The maximum number of message batches to have in flight at a given time. Increase this to improve throughput."),
 			service.NewBatchPolicyField(csoFieldBatching),
@@ -216,11 +240,24 @@ func (g *gcpCloudStorageOutput) Connect(ctx context.Context) error {
 	defer g.connMut.Unlock()
 
 	var err error
-	g.client, err = storage.NewClient(context.Background())
+	var opt []option.ClientOption
+	opt, err = getClientOptionWithCredential(g.conf.CredentialsJSON, opt)
+	if err != nil {
+		return err
+	}
+
+	g.client, err = storage.NewClient(context.Background(), opt...)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func getClientOptionWithCredential(credentialsJSON string, opt []option.ClientOption) ([]option.ClientOption, error) {
+	if len(credentialsJSON) > 0 {
+		opt = append(opt, option.WithCredentialsJSON([]byte(credentialsJSON)))
+	}
+	return opt, nil
 }
 
 func (g *gcpCloudStorageOutput) WriteBatch(ctx context.Context, batch service.MessageBatch) error {

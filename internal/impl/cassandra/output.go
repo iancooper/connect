@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cassandra
 
 import (
@@ -192,7 +206,11 @@ func (c *cassandraWriter) WriteBatch(ctx context.Context, batch service.MessageB
 }
 
 func (c *cassandraWriter) writeRow(session *gocql.Session, b service.MessageBatch) error {
-	values, err := c.mapArgs(b, 0)
+	var argsExec *service.MessageBatchBloblangExecutor
+	if c.argsMapping != nil {
+		argsExec = b.BloblangExecutor(c.argsMapping)
+	}
+	values, err := c.mapArgs(0, argsExec)
 	if err != nil {
 		return fmt.Errorf("parsing args: %w", err)
 	}
@@ -202,8 +220,13 @@ func (c *cassandraWriter) writeRow(session *gocql.Session, b service.MessageBatc
 func (c *cassandraWriter) writeBatch(session *gocql.Session, b service.MessageBatch) error {
 	batch := session.NewBatch(c.batchType)
 
+	var argsExec *service.MessageBatchBloblangExecutor
+	if c.argsMapping != nil {
+		argsExec = b.BloblangExecutor(c.argsMapping)
+	}
+
 	for i := range b {
-		values, err := c.mapArgs(b, i)
+		values, err := c.mapArgs(i, argsExec)
 		if err != nil {
 			return fmt.Errorf("parsing args for part: %d: %w", i, err)
 		}
@@ -213,30 +236,31 @@ func (c *cassandraWriter) writeBatch(session *gocql.Session, b service.MessageBa
 	return session.ExecuteBatch(batch)
 }
 
-func (c *cassandraWriter) mapArgs(b service.MessageBatch, index int) ([]any, error) {
-	if c.argsMapping != nil {
-		// We've got an "args_mapping" field, extract values from there.
-		part, err := b.BloblangQuery(index, c.argsMapping)
-		if err != nil {
-			return nil, fmt.Errorf("executing bloblang mapping: %w", err)
-		}
-
-		jraw, err := part.AsStructured()
-		if err != nil {
-			return nil, fmt.Errorf("parsing bloblang mapping result as json: %w", err)
-		}
-
-		j, ok := jraw.([]any)
-		if !ok {
-			return nil, fmt.Errorf("expected bloblang mapping result to be []interface{} but was %T", jraw)
-		}
-
-		for i, v := range j {
-			j[i] = genericValue{v: v}
-		}
-		return j, nil
+func (c *cassandraWriter) mapArgs(index int, exec *service.MessageBatchBloblangExecutor) ([]any, error) {
+	if exec == nil {
+		return nil, nil
 	}
-	return nil, nil
+
+	// We've got an "args_mapping" field, extract values from there.
+	part, err := exec.Query(index)
+	if err != nil {
+		return nil, fmt.Errorf("executing bloblang mapping: %w", err)
+	}
+
+	jraw, err := part.AsStructured()
+	if err != nil {
+		return nil, fmt.Errorf("parsing bloblang mapping result as json: %w", err)
+	}
+
+	j, ok := jraw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected bloblang mapping result to be []interface{} but was %T", jraw)
+	}
+
+	for i, v := range j {
+		j[i] = genericValue{v: v}
+	}
+	return j, nil
 }
 
 func (c *cassandraWriter) Close(context.Context) error {
@@ -262,14 +286,14 @@ func (d *decorator) Attempt(q gocql.RetryableQuery) bool {
 	return true
 }
 
-func getExponentialTime(min, max time.Duration, attempts int) time.Duration {
-	minFloat := float64(min)
+func getExponentialTime(minDur, maxDur time.Duration, attempts int) time.Duration {
+	minFloat := float64(minDur)
 	napDuration := minFloat * math.Pow(2, float64(attempts-1))
 
 	// Add some jitter
 	napDuration += rand.Float64()*minFloat - (minFloat / 2)
-	if napDuration > float64(max) {
-		return max
+	if napDuration > float64(maxDur) {
+		return maxDur
 	}
 	return time.Duration(napDuration)
 }

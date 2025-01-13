@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mongodb
 
 import (
@@ -34,6 +48,7 @@ const (
 	commonFieldClientDatabase = "database"
 	commonFieldClientUsername = "username"
 	commonFieldClientPassword = "password"
+	commonFieldClientAppName  = "app_name"
 )
 
 func clientFields() []*service.ConfigField {
@@ -50,6 +65,10 @@ func clientFields() []*service.ConfigField {
 			Description("The password to connect to the database.").
 			Default("").
 			Secret(),
+		service.NewURLField(commonFieldClientAppName).
+			Description("The client application name.").
+			Default("benthos").
+			Advanced(),
 	}
 }
 
@@ -67,11 +86,17 @@ func getClient(parsedConf *service.ParsedConfig) (client *mongo.Client, database
 		return
 	}
 
+	var appName string
+	if appName, err = parsedConf.FieldString(commonFieldClientAppName); err != nil {
+		return
+	}
+
 	opt := options.Client().
 		SetConnectTimeout(10 * time.Second).
 		SetSocketTimeout(30 * time.Second).
 		SetServerSelectionTimeout(30 * time.Second).
-		ApplyURI(url)
+		ApplyURI(url).
+		SetAppName(appName)
 
 	if username != "" && password != "" {
 		creds := options.Credential{
@@ -378,8 +403,29 @@ func writeMapsFromParsed(conf *service.ParsedConfig, operation Operation) (maps 
 	return
 }
 
-func extJSONFromMap(b service.MessageBatch, i int, m *bloblang.Executor) (any, error) {
-	msg, err := b.BloblangQuery(i, m)
+type writeMapsExec struct {
+	filterMap   *service.MessageBatchBloblangExecutor
+	documentMap *service.MessageBatchBloblangExecutor
+	hintMap     *service.MessageBatchBloblangExecutor
+	upsert      bool
+}
+
+func (w writeMaps) exec(b service.MessageBatch) (e writeMapsExec) {
+	if w.filterMap != nil {
+		e.filterMap = b.BloblangExecutor(w.filterMap)
+	}
+	if w.documentMap != nil {
+		e.documentMap = b.BloblangExecutor(w.documentMap)
+	}
+	if w.hintMap != nil {
+		e.hintMap = b.BloblangExecutor(w.hintMap)
+	}
+	e.upsert = w.upsert
+	return
+}
+
+func extJSONFromMap(i int, m *service.MessageBatchBloblangExecutor) (any, error) {
+	msg, err := m.Query(i)
 	if err != nil {
 		return nil, err
 	}
@@ -399,28 +445,28 @@ func extJSONFromMap(b service.MessageBatch, i int, m *bloblang.Executor) (any, e
 	return ejsonVal, nil
 }
 
-func (w writeMaps) extractFromMessage(operation Operation, i int, batch service.MessageBatch) (
+func (w writeMapsExec) extractFromMessage(operation Operation, i int) (
 	docJSON, filterJSON, hintJSON any, err error,
 ) {
 	filterValWanted := operation.isFilterAllowed()
 	documentValWanted := operation.isDocumentAllowed()
 
 	if filterValWanted && w.filterMap != nil {
-		if filterJSON, err = extJSONFromMap(batch, i, w.filterMap); err != nil {
+		if filterJSON, err = extJSONFromMap(i, w.filterMap); err != nil {
 			err = fmt.Errorf("failed to execute filter_map: %v", err)
 			return
 		}
 	}
 
 	if documentValWanted && w.documentMap != nil {
-		if docJSON, err = extJSONFromMap(batch, i, w.documentMap); err != nil {
+		if docJSON, err = extJSONFromMap(i, w.documentMap); err != nil {
 			err = fmt.Errorf("failed to execute document_map: %v", err)
 			return
 		}
 	}
 
 	if w.hintMap != nil {
-		if hintJSON, err = extJSONFromMap(batch, i, w.hintMap); err != nil {
+		if hintJSON, err = extJSONFromMap(i, w.hintMap); err != nil {
 			return
 		}
 	}

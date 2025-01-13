@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package elasticsearch
 
 import (
@@ -34,6 +48,7 @@ const (
 	esoFieldAuthEnabled  = "enabled"
 	esoFieldAuthUsername = "username"
 	esoFieldAuthPassword = "password"
+	esoFieldAPIKey       = "api_key"
 	esoFieldAWS          = "aws"
 	// ESOFieldAWSEnabled enabled field.
 	ESOFieldAWSEnabled      = "enabled"
@@ -93,6 +108,17 @@ func esoConfigFromParsed(pConf *service.ParsedConfig) (conf esoConfig, err error
 			}
 			conf.clientOpts = append(conf.clientOpts, elastic.SetBasicAuth(username, password))
 		}
+	}
+
+	if pConf.Contains(esoFieldAPIKey) {
+		var apiKey string
+		apiKey, err = pConf.FieldString(esoFieldAPIKey)
+		if err != nil {
+			return
+		}
+		header := http.Header{}
+		header.Set("Authorization", "ApiKey "+apiKey)
+		conf.clientOpts = append(conf.clientOpts, elastic.SetHeaders(header))
 	}
 
 	var timeout time.Duration
@@ -211,7 +237,7 @@ It's possible to enable AWS connectivity with this output using the `+"`aws`"+` 
 				Default(""),
 			service.NewInterpolatedStringField(esoFieldID).
 				Description("The ID for indexed messages. Interpolation should be used in order to create a unique ID for each message.").
-				Default(`${!count("elastic_ids")}-${!timestamp_unix()}`),
+				Default(`${!counter()}-${!timestamp_unix()}`),
 			service.NewInterpolatedStringField(esoFieldType).
 				Description("The document mapping type. This field is required for versions of elasticsearch earlier than 6.0.0, but are invalid for versions 7.0.0 or later.").
 				Default(""),
@@ -220,7 +246,7 @@ It's possible to enable AWS connectivity with this output using the `+"`aws`"+` 
 				Advanced().
 				Default(""),
 			service.NewBoolField(esoFieldSniff).
-				Description("Prompts Benthos to sniff for brokers to connect to when establishing a connection.").
+				Description("Prompts Redpanda Connect to sniff for brokers to connect to when establishing a connection.").
 				Advanced().
 				Default(true),
 			service.NewBoolField(esoFieldHealthcheck).
@@ -231,6 +257,10 @@ It's possible to enable AWS connectivity with this output using the `+"`aws`"+` 
 				Description("The maximum time to wait before abandoning a request (and trying again).").
 				Advanced().
 				Default("5s"),
+			service.NewStringField(esoFieldAPIKey).
+				Description("The key to set in the Authorization header if using API keys for authentication.").
+				Optional().
+				Secret(),
 			service.NewTLSToggledField(esoFieldTLS),
 			service.NewOutputMaxInFlightField(),
 		).
@@ -255,7 +285,20 @@ It's possible to enable AWS connectivity with this output using the `+"`aws`"+` 
 				Description("Enable gzip compression on the request side.").
 				Advanced().
 				Default(false),
-		)
+		).
+		Example(
+			"Elastic Cloud Serverless",
+			"This is an example of writing data to https://www.elastic.co/docs/current/serverless[Elastic Cloud serverless^].",
+			`
+output:
+  elasticsearch:
+    urls: ["https://${ELASTIC_CLOUD_CLUSTER_ID}.es.us-east-1.aws.elastic.cloud:443"]
+    sniff: false
+    healthcheck: false
+    index: "my-elasticsearch-index"
+    id: my-document-id-${!counter()}-${!timestamp_unix()}
+    api_key: "${ELASTIC_CLOUD_API_KEY}"
+`)
 }
 
 func init() {
@@ -313,7 +356,10 @@ func (e *Output) Connect(ctx context.Context) error {
 }
 
 func shouldRetry(s int) bool {
-	if s >= 500 && s <= 599 {
+	// Retry if the status code is 429 (Too Many Requests) or any 5xx server error.
+	// HTTP 429 indicates the elasticsearch cluster is rate-limiting the client and expects the client to backoff
+	// https://www.elastic.co/guide/en/elasticsearch/reference/current/tune-for-indexing-speed.html#multiple-workers-threads
+	if s == 429 || (s >= 500 && s <= 599) {
 		return true
 	}
 	return false

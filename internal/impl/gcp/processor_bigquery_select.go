@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -15,7 +29,8 @@ import (
 )
 
 type bigQuerySelectProcessorConfig struct {
-	project string
+	project         string
+	credentialsJSON string
 
 	queryParts  *bqQueryParts
 	jobLabels   map[string]string
@@ -27,6 +42,10 @@ func bigQuerySelectProcessorConfigFromParsed(inConf *service.ParsedConfig) (conf
 	conf.queryParts = &queryParts
 
 	if conf.project, err = inConf.FieldString("project"); err != nil {
+		return
+	}
+
+	if conf.credentialsJSON, err = inConf.FieldString("credentials_json"); err != nil {
 		return
 	}
 
@@ -77,6 +96,7 @@ func newBigQuerySelectProcessorConfig() *service.ConfigSpec {
 		Categories("Integration").
 		Summary("Executes a `SELECT` query against BigQuery and replaces messages with the rows returned.").
 		Field(service.NewStringField("project").Description("GCP project where the query job will execute.")).
+		Field(service.NewStringField("credentials_json").Description("An optional field to set Google Service Account Credentials json.").Secret().Default("")).
 		Field(service.NewStringField("table").Description("Fully-qualified BigQuery table name to query.").Example("bigquery-public-data.samples.shakespeare")).
 		Field(service.NewStringListField("columns").Description("A list of columns to query.")).
 		Field(service.NewStringField("where").
@@ -146,6 +166,12 @@ func newBigQuerySelectProcessor(inConf *service.ParsedConfig, options *bigQueryP
 
 	closeCtx, closeF := context.WithCancel(context.Background())
 
+	options.clientOptions, err = getClientOptionWithCredential(conf.credentialsJSON, options.clientOptions)
+	if err != nil {
+		closeF()
+		return nil, err
+	}
+
 	wrapped, err := bigquery.NewClient(closeCtx, conf.project, options.clientOptions...)
 	if err != nil {
 		closeF()
@@ -164,16 +190,19 @@ func newBigQuerySelectProcessor(inConf *service.ParsedConfig, options *bigQueryP
 }
 
 func (proc *bigQuerySelectProcessor) ProcessBatch(ctx context.Context, batch service.MessageBatch) ([]service.MessageBatch, error) {
-	argsMapping := proc.config.argsMapping
-
 	outBatch := make(service.MessageBatch, 0, len(batch))
+
+	var argsExec *service.MessageBatchBloblangExecutor
+	if proc.config.argsMapping != nil {
+		argsExec = batch.BloblangExecutor(proc.config.argsMapping)
+	}
 
 	for i, msg := range batch {
 		outBatch = append(outBatch, msg)
 
 		var args []any
-		if argsMapping != nil {
-			resMsg, err := batch.BloblangQuery(i, argsMapping)
+		if argsExec != nil {
+			resMsg, err := argsExec.Query(i)
 			if err != nil {
 				msg.SetError(fmt.Errorf("failed to resolve args mapping: %w", err))
 				continue

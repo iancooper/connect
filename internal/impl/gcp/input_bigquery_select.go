@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -8,6 +22,7 @@ import (
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 
 	"github.com/Jeffail/shutdown"
 
@@ -16,11 +31,12 @@ import (
 )
 
 type bigQuerySelectInputConfig struct {
-	project       string
-	queryParts    *bqQueryParts
-	argsMapping   *bloblang.Executor
-	queryPriority bigquery.QueryPriority
-	jobLabels     map[string]string
+	project         string
+	queryParts      *bqQueryParts
+	argsMapping     *bloblang.Executor
+	queryPriority   bigquery.QueryPriority
+	jobLabels       map[string]string
+	credentialsJSON string
 }
 
 func bigQuerySelectInputConfigFromParsed(inConf *service.ParsedConfig) (conf bigQuerySelectInputConfig, err error) {
@@ -73,6 +89,10 @@ func bigQuerySelectInputConfigFromParsed(inConf *service.ParsedConfig) (conf big
 		return
 	}
 
+	if conf.credentialsJSON, err = inConf.FieldString("credentials_json"); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -84,6 +104,10 @@ func newBigQuerySelectInputConfig() *service.ConfigSpec {
 		Summary("Executes a `SELECT` query against BigQuery and creates a message for each row received.").
 		Description(`Once the rows from the query are exhausted, this input shuts down, allowing the pipeline to gracefully terminate (or the next input in a xref:components:inputs/sequence.adoc[sequence] to execute).`).
 		Field(service.NewStringField("project").Description("GCP project where the query job will execute.")).
+		Field(service.NewStringField("credentials_json").
+			Description("An optional field to set Google Service Account Credentials json.").
+			Secret().
+			Default("")).
 		Field(service.NewStringField("table").Description("Fully-qualified BigQuery table name to query.").Example("bigquery-public-data.samples.shakespeare")).
 		Field(service.NewStringListField("columns").Description("A list of columns to query.")).
 		Field(service.NewStringField("where").
@@ -158,7 +182,14 @@ func (inp *bigQuerySelectInput) Connect(ctx context.Context) error {
 	jobctx, _ := inp.shutdownSig.SoftStopCtx(context.Background())
 
 	if inp.client == nil {
-		client, err := bigquery.NewClient(jobctx, inp.config.project)
+		var err error
+		var opt []option.ClientOption
+		opt, err = getClientOptionWithCredential(inp.config.credentialsJSON, opt)
+		if err != nil {
+			return err
+		}
+
+		client, err := bigquery.NewClient(jobctx, inp.config.project, opt...)
 		if err != nil {
 			return fmt.Errorf("failed to create bigquery client: %w", err)
 		}

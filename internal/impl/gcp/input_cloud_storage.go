@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -10,6 +24,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
 	"github.com/redpanda-data/benthos/v4/public/service/codec"
@@ -17,16 +32,18 @@ import (
 
 const (
 	// Cloud Storage Input Fields
-	csiFieldBucket        = "bucket"
-	csiFieldPrefix        = "prefix"
-	csiFieldDeleteObjects = "delete_objects"
+	csiFieldBucket          = "bucket"
+	csiFieldPrefix          = "prefix"
+	csiFieldCredentialsJSON = "credentials_json"
+	csiFieldDeleteObjects   = "delete_objects"
 )
 
 type csiConfig struct {
-	Bucket        string
-	Prefix        string
-	DeleteObjects bool
-	Codec         codec.DeprecatedFallbackCodec
+	Bucket          string
+	Prefix          string
+	CredentialsJSON string
+	DeleteObjects   bool
+	Codec           codec.DeprecatedFallbackCodec
 }
 
 func csiConfigFromParsed(pConf *service.ParsedConfig) (conf csiConfig, err error) {
@@ -34,6 +51,9 @@ func csiConfigFromParsed(pConf *service.ParsedConfig) (conf csiConfig, err error
 		return
 	}
 	if conf.Prefix, err = pConf.FieldString(csiFieldPrefix); err != nil {
+		return
+	}
+	if conf.CredentialsJSON, err = pConf.FieldString(csiFieldCredentialsJSON); err != nil {
 		return
 	}
 	if conf.Codec, err = codec.DeprecatedCodecFromParsed(pConf); err != nil {
@@ -70,13 +90,17 @@ You can access these metadata fields using xref:configuration:interpolation.adoc
 
 === Credentials
 
-By default Benthos will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].`).
+By default Redpanda Connect will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].`).
 		Fields(
 			service.NewStringField(csiFieldBucket).
 				Description("The name of the bucket from which to download objects."),
 			service.NewStringField(csiFieldPrefix).
 				Description("An optional path prefix, if set only objects with the prefix are consumed.").
 				Default(""),
+			service.NewStringField(csiFieldCredentialsJSON).
+				Description("An optional field to set Google Service Account Credentials json.").
+				Default("").
+				Secret(),
 		).
 		Fields(codec.DeprecatedCodecFields("to_the_end")...).
 		Fields(
@@ -253,7 +277,14 @@ func newGCPCloudStorageInput(conf csiConfig, res *service.Resources) (*gcpCloudS
 // Cloud Storage bucket.
 func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 	var err error
-	g.client, err = storage.NewClient(context.Background())
+
+	var opt []option.ClientOption
+	opt, err = getClientOptionWithCredential(g.conf.CredentialsJSON, opt)
+	if err != nil {
+		return err
+	}
+
+	g.client, err = storage.NewClient(context.Background(), opt...)
 	if err != nil {
 		return err
 	}

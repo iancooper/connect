@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka
 
 import (
@@ -43,6 +57,8 @@ const (
 	oskFieldBatching                     = "batching"
 	oskFieldMaxRetries                   = "max_retries"
 	oskFieldBackoff                      = "backoff"
+	oskFieldTimestamp                    = "timestamp"
+	oskFieldTimestampMs                  = "timestamp_ms"
 )
 
 // OSKConfigSpec creates a new config spec for a kafka output.
@@ -151,6 +167,19 @@ Unfortunately this error message will appear for a wide range of connection prob
 				MaxInterval:     time.Second * 10,
 				MaxElapsedTime:  time.Second * 30,
 			}).Description("Control time intervals between retry attempts.").Advanced(),
+			service.NewInterpolatedStringField(oskFieldTimestamp).
+				Description("An optional timestamp to set for each message. When left empty, the current timestamp is used.").
+				Example(`${! timestamp_unix() }`).
+				Example(`${! metadata("kafka_timestamp_unix") }`).
+				Optional().
+				Advanced().
+				Deprecated(),
+			service.NewInterpolatedStringField(oskFieldTimestampMs).
+				Description("An optional timestamp to set for each message expressed in milliseconds. When left empty, the current timestamp is used.").
+				Example(`${! timestamp_unix_milli() }`).
+				Example(`${! metadata("kafka_timestamp_ms") }`).
+				Optional().
+				Advanced(),
 		)
 }
 
@@ -183,6 +212,8 @@ type kafkaWriter struct {
 	key           *service.InterpolatedString
 	topic         *service.InterpolatedString
 	partition     *service.InterpolatedString
+	timestamp     *service.InterpolatedString
+	isTimestampMs bool
 	staticHeaders map[string]string
 	metaFilter    *service.MetadataExcludeFilter
 	retryAsBatch  bool
@@ -292,6 +323,23 @@ func NewKafkaWriterFromParsed(conf *service.ParsedConfig, mgr *service.Resources
 
 	if k.admin, err = sarama.NewClusterAdmin(k.addresses, k.saramConf); err != nil {
 		return nil, err
+	}
+
+	if conf.Contains(oskFieldTimestamp) && conf.Contains(oskFieldTimestampMs) {
+		return nil, errors.New("cannot specify both timestamp and timestamp_ms fields")
+	}
+
+	if conf.Contains(oskFieldTimestamp) {
+		if k.timestamp, err = conf.FieldInterpolatedString(oskFieldTimestamp); err != nil {
+			return nil, err
+		}
+	}
+
+	if conf.Contains(oskFieldTimestampMs) {
+		if k.timestamp, err = conf.FieldInterpolatedString(oskFieldTimestampMs); err != nil {
+			return nil, err
+		}
+		k.isTimestampMs = true
 	}
 
 	return &k, nil
@@ -477,17 +525,28 @@ func (k *kafkaWriter) WriteBatch(ctx context.Context, msg service.MessageBatch) 
 		return service.ErrNotConnected
 	}
 
+	topicExecutor := msg.InterpolationExecutor(k.topic)
+	keyExecutor := msg.InterpolationExecutor(k.key)
+	var partitionExecutor *service.MessageBatchInterpolationExecutor
+	if k.partition != nil {
+		partitionExecutor = msg.InterpolationExecutor(k.partition)
+	}
+	var timestampExecutor *service.MessageBatchInterpolationExecutor
+	if k.timestamp != nil {
+		timestampExecutor = msg.InterpolationExecutor(k.timestamp)
+	}
+
 	boff := k.backoffCtor()
 
 	userDefinedHeaders := k.buildUserDefinedHeaders(k.staticHeaders)
 	msgs := []*sarama.ProducerMessage{}
 
 	for i := 0; i < len(msg); i++ {
-		key, err := msg.TryInterpolatedBytes(i, k.key)
+		key, err := keyExecutor.TryBytes(i)
 		if err != nil {
 			return fmt.Errorf("key interpolation error: %w", err)
 		}
-		topic, err := msg.TryInterpolatedString(i, k.topic)
+		topic, err := topicExecutor.TryString(i)
 		if err != nil {
 			return fmt.Errorf("topic interpolation error: %w", err)
 		}
@@ -515,8 +574,8 @@ func (k *kafkaWriter) WriteBatch(ctx context.Context, msg service.MessageBatch) 
 		// partitioner.  Although samara will (currently) ignore the partition
 		// field when not using a manual partitioner, we should only set it when
 		// we explicitly want that.
-		if k.partition != nil {
-			partitionString, err := msg.TryInterpolatedString(i, k.partition)
+		if partitionExecutor != nil {
+			partitionString, err := partitionExecutor.TryString(i)
 			if err != nil {
 				return fmt.Errorf("partition interpolation error: %w", err)
 			}
@@ -534,6 +593,23 @@ func (k *kafkaWriter) WriteBatch(ctx context.Context, msg service.MessageBatch) 
 			// samara requires a 32-bit integer for the partition field
 			nextMsg.Partition = int32(partitionInt)
 		}
+
+		if timestampExecutor != nil {
+			if tsStr, err := timestampExecutor.TryString(i); err != nil {
+				return fmt.Errorf("timestamp interpolation error: %w", err)
+			} else {
+				if ts, err := strconv.ParseInt(tsStr, 10, 64); err != nil {
+					return fmt.Errorf("failed to parse timestamp: %w", err)
+				} else {
+					if k.isTimestampMs {
+						nextMsg.Timestamp = time.UnixMilli(ts)
+					} else {
+						nextMsg.Timestamp = time.Unix(ts, 0)
+					}
+				}
+			}
+		}
+
 		msgs = append(msgs, nextMsg)
 	}
 

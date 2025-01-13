@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package amqp1
 
 import (
@@ -11,6 +25,15 @@ import (
 
 	"github.com/redpanda-data/benthos/v4/public/bloblang"
 	"github.com/redpanda-data/benthos/v4/public/service"
+)
+
+type amqpContentType string
+
+const (
+	// Data section with opaque binary data
+	amqpContentTypeOpaqueBinary amqpContentType = "opaque_binary"
+	// Single AMQP string value
+	amqpContentTypeString amqpContentType = "string"
 )
 
 func amqp1OutputSpec() *service.ConfigSpec {
@@ -54,6 +77,11 @@ This output benefits from sending multiple messages in flight in parallel for im
 			saslFieldSpec(),
 			service.NewMetadataExcludeFilterField(metaFilterField).
 				Description("Specify criteria for which metadata values are attached to messages as headers."),
+			service.NewStringEnumField(contentTypeField,
+				string(amqpContentTypeOpaqueBinary), string(amqpContentTypeString)).
+				Description("Specify the message body content type. The option `string` will transfer the message as an AMQP value of type string. Consider choosing the option `string` if your intention is to transfer UTF-8 string messages (like JSON messages) to the destination.").
+				Advanced().
+				Default(string(amqpContentTypeOpaqueBinary)),
 		).LintRule(`
 root = if this.url.or("") == "" && this.urls.or([]).length() == 0 {
   "field 'urls' must be set"
@@ -91,6 +119,7 @@ type amqp1Writer struct {
 	metaFilter               *service.MetadataExcludeFilter
 	applicationPropertiesMap *bloblang.Executor
 	connOpts                 *amqp.ConnOptions
+	contentType              amqpContentType
 
 	log      *service.Logger
 	connLock sync.RWMutex
@@ -150,6 +179,13 @@ func amqp1WriterFromParsed(conf *service.ParsedConfig, mgr *service.Resources) (
 	if a.metaFilter, err = conf.FieldMetadataExcludeFilter(metaFilterField); err != nil {
 		return nil, err
 	}
+
+	if contentType, err := conf.FieldString(contentTypeField); err != nil {
+		return nil, err
+	} else {
+		a.contentType = amqpContentType(contentType)
+	}
+
 	return &a, nil
 }
 
@@ -234,7 +270,16 @@ func (a *amqp1Writer) Write(ctx context.Context, msg *service.Message) error {
 		return err
 	}
 
-	m := amqp.NewMessage(mBytes)
+	var m *amqp.Message
+	switch a.contentType {
+	case amqpContentTypeOpaqueBinary:
+		m = amqp.NewMessage(mBytes)
+	case amqpContentTypeString:
+		m = &amqp.Message{}
+		m.Value = string(mBytes)
+	default:
+		return fmt.Errorf("invalid content type specified: %s", a.contentType)
+	}
 
 	if a.applicationPropertiesMap != nil {
 		mapMsg, err := msg.BloblangQuery(a.applicationPropertiesMap)

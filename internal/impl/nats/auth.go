@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package nats
 
 import (
@@ -20,7 +34,7 @@ func authDescription() string {
 
 == Authentication
 
-There are several components within Benthos which uses NATS services. You will find that each of these components
+There are several components within Redpanda Connect which uses NATS services. You will find that each of these components
 support optional advanced authentication parameters for https://docs.nats.io/nats-server/configuration/securing_nats/auth_intro/nkey_auth[NKeys^]
 and https://docs.nats.io/using-nats/developer/connecting/creds[User Credentials^].
 
@@ -30,7 +44,7 @@ See an https://docs.nats.io/running-a-nats-service/nats_admin/security/jwt[in-de
 
 The NATS server can use these NKeys in several ways for authentication. The simplest is for the server to be configured
 with a list of known public keys and for the clients to respond to the challenge by signing it with its private NKey
-configured in the ` + "`nkey_file`" + ` field.
+configured in the ` + "`nkey_file`" + ` or ` + "`nkey`" + ` field.
 
 https://docs.nats.io/running-a-nats-service/configuration/securing_nats/auth_intro/nkey_auth[More details^].
 
@@ -55,6 +69,12 @@ func authFieldSpec() *service.ConfigField {
 			Description("An optional file containing a NKey seed.").
 			Example("./seed.nk").
 			Optional(),
+		service.NewStringField("nkey").
+			Description("The NKey seed.").
+			Secret().
+			Optional().
+			Version("4.38.0").
+			Example("UDXU4RCSJNZOIQHZNWXHXORDPRTGNJAHAHFRGZNEEJCPQTT2M7NLCNF4"), // don't worry, this sample seed is from Nats offical doc
 		service.NewStringField("user_credentials_file").
 			Description("An optional file containing user credentials which consist of an user JWT and corresponding NKey seed.").
 			Example("./user.creds").
@@ -73,6 +93,7 @@ func authFieldSpec() *service.ConfigField {
 
 type authConfig struct {
 	NKeyFile            string
+	NKey                string
 	UserCredentialsFile string
 	UserJWT             string
 	UserNkeySeed        string
@@ -84,6 +105,14 @@ func authConfToOptions(auth authConfig, fs *service.FS) []nats.Option {
 	var opts []nats.Option
 	if auth.NKeyFile != "" {
 		if opt, err := nats.NkeyOptionFromSeed(auth.NKeyFile); err != nil {
+			opts = append(opts, func(*nats.Options) error { return err })
+		} else {
+			opts = append(opts, opt)
+		}
+	}
+
+	if auth.NKey != "" {
+		if opt, err := nkeyOptionFromString(auth.NKey); err != nil {
 			opts = append(opts, func(*nats.Options) error { return err })
 		} else {
 			opts = append(opts, opt)
@@ -115,6 +144,11 @@ func authConfToOptions(auth authConfig, fs *service.FS) []nats.Option {
 func AuthFromParsedConfig(p *service.ParsedConfig) (c authConfig, err error) {
 	if p.Contains("nkey_file") {
 		if c.NKeyFile, err = p.FieldString("nkey_file"); err != nil {
+			return
+		}
+	}
+	if p.Contains("nkey") {
+		if c.NKey, err = p.FieldString("nkey"); err != nil {
 			return
 		}
 	}
@@ -233,4 +267,25 @@ func loadFileContents(filename string, fs *service.FS) ([]byte, error) {
 	defer f.Close()
 
 	return io.ReadAll(f)
+}
+
+func nkeyOptionFromString(nkey string) (nats.Option, error) {
+	kp, err := nkeys.ParseDecoratedNKey([]byte(nkey))
+	if err != nil {
+		return nil, errors.New("failed to parse nkey")
+	}
+
+	pub, err := kp.PublicKey()
+	if err != nil {
+		return nil, errors.New("failed to extract public key from nkey")
+	}
+	if !nkeys.IsValidPublicUserKey(pub) {
+		return nil, errors.New("invalid nkey user seed")
+	}
+
+	sigCB := func(nonce []byte) ([]byte, error) {
+		return kp.Sign(nonce)
+	}
+
+	return nats.Nkey(pub, sigCB), nil
 }

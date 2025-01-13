@@ -1,9 +1,24 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/sourcegraph/conc/pool"
@@ -44,6 +59,10 @@ pipeline:
 `+"```"+``).
 		Fields(
 			service.NewStringField("project").Description("The project ID of the topic to publish to."),
+			service.NewStringField("credentials_json").
+				Description("An optional field to set Google Service Account Credentials json.").
+				Default("").
+				Secret(),
 			service.NewInterpolatedStringField("topic").Description("The topic to publish to."),
 			service.NewStringField("endpoint").
 				Default("").
@@ -182,6 +201,16 @@ func newPubSubOutput(conf *service.ParsedConfig) (*pubsubOutput, error) {
 		opt = []option.ClientOption{option.WithEndpoint(endpoint)}
 	}
 
+	var credsJSON string
+	credsJSON, err = conf.FieldString("credentials_json")
+	if err != nil {
+		return nil, err
+	}
+	opt, err = getClientOptionWithCredential(credsJSON, opt)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pubsubOutput{
 		topics:          make(map[string]pubsubTopic),
 		project:         project,
@@ -271,7 +300,9 @@ func (out *pubsubOutput) Close(_ context.Context) error {
 		out.clientCancel()
 	}
 
-	return nil
+	err := out.client.Close()
+	out.client = nil
+	return err
 }
 
 func (out *pubsubOutput) writeMessage(ctx context.Context, cachedTopics map[string]pubsubTopic, msg *service.Message) (publishResult, error) {
@@ -294,6 +325,16 @@ func (out *pubsubOutput) writeMessage(ctx context.Context, cachedTopics map[stri
 
 	attr := make(map[string]string)
 	if err := out.metaFilter.Walk(msg, func(key, value string) error {
+		// Checking attributes explicitly for UTF-8 validity makes the user experience way better. We can point out
+		// which key is non-compatible.
+		// The UTF-8 requirement comes from internal Protocol Buffer/GRPC conversions happening in the PubSub client.
+		if !utf8.ValidString(key) {
+			return fmt.Errorf("metadata field %s contains non-UTF-8 characters", key)
+		}
+		if !utf8.ValidString(value) {
+			return fmt.Errorf("metadata field %s contains non-UTF-8 data: %s", key, value)
+		}
+
 		attr[key] = value
 		return nil
 	}); err != nil {

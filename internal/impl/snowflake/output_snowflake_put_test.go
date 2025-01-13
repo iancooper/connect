@@ -1,3 +1,11 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed as a Redpanda Enterprise file under the Redpanda Community
+// License (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+// https://github.com/redpanda-data/connect/blob/main/licenses/rcl.md
+
 package snowflake
 
 import (
@@ -186,7 +194,7 @@ snowpipe: '` + tc.snowpipe + `'
 			privateKeyPath:    "resources/ssh_keys/snowflake_rsa_key.p8",
 			stage:             "@test_stage",
 			compression:       "NONE",
-			errConfigContains: "failed to read private key: private key requires a passphrase, but private_key_passphrase was not supplied",
+			errConfigContains: "failed to read private key: private key requires a passphrase, but private_key_pass was not supplied",
 		},
 		{
 			name:           "executes snowflake query without compression",

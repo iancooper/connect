@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package awk
 
 import (
@@ -267,7 +281,7 @@ will be used.
 
 Signature: `+"`print_log(message, level)`"+`
 
-Prints a Benthos log message at a particular log level. The log level is
+Prints a Redpanda Connect log message at a particular log level. The log level is
 optional, and if omitted the level `+"`INFO`"+` will be used.
 
 `+"=== `base64_encode`"+`
@@ -285,11 +299,11 @@ successful. It will emit an error otherwise.
 
 `).
 		Field(service.NewStringEnumField("codec", "none", "text", "json").
-			Description("A <<codecs,codec>> defines how messages should be inserted into the AWK program as variables. The codec does not change which <<awk-functions,custom Benthos functions>> are available. The `text` codec is the closest to a typical AWK use case.")).
+			Description("A <<codecs,codec>> defines how messages should be inserted into the AWK program as variables. The codec does not change which <<awk-functions,custom Redpanda Connect functions>> are available. The `text` codec is the closest to a typical AWK use case.")).
 		Field(service.NewStringField("program").
 			Description("An AWK program to execute")).
 		Example("JSON Mapping and Arithmetic", `
-Because AWK is a full programming language it's much easier to map documents and perform arithmetic with it than with other Benthos processors. For example, if we were expecting documents of the form:
+Because AWK is a full programming language it's much easier to map documents and perform arithmetic with it than with other Redpanda Connect processors. For example, if we were expecting documents of the form:
 
 `+"```json"+`
 {"doc":{"val1":5,"val2":10},"id":"1","type":"add"}

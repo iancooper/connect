@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package sql
 
 import (
@@ -12,13 +26,15 @@ import (
 	"github.com/redpanda-data/benthos/v4/public/service"
 )
 
-var driverField = service.NewStringEnumField("driver", "mysql", "postgres", "clickhouse", "mssql", "sqlite", "oracle", "snowflake", "trino", "gocosmos").
+var driverField = service.NewStringEnumField("driver", "mysql", "postgres", "clickhouse", "mssql", "sqlite", "oracle", "snowflake", "trino", "gocosmos", "spanner").
 	Description("A database <<drivers, driver>> to use.")
 
 var dsnField = service.NewStringField("dsn").
 	Description(`A Data Source Name to identify the target database.
 
 ==== Drivers
+
+:driver-support: mysql=certified, postgres=certified, clickhouse=community, mssql=community, sqlite=certified, oracle=certified, snowflake=community, trino=community, gocosmos=community, spanner=community
 
 The following is a list of supported drivers, their placeholder style, and their respective DSN formats:
 
@@ -51,6 +67,9 @@ The following is a list of supported drivers, their placeholder style, and their
 
 ` + "| `gocosmos` " + `
 ` + "| https://pkg.go.dev/github.com/microsoft/gocosmos#readme-example-usage[`AccountEndpoint=<cosmosdb-endpoint>;AccountKey=<cosmosdb-account-key>[;TimeoutMs=<timeout-in-ms>\\][;Version=<cosmosdb-api-version>\\][;DefaultDb/Db=<db-name>\\][;AutoId=<true/false>\\][;InsecureSkipVerify=<true/false>\\]`^] " + `
+
+` + "| `spanner` " + `
+` + "| projects/[PROJECT]/instances/[INSTANCE]/databases/[DATABASE] " + `
 |===
 
 Please note that the ` + "`postgres`" + ` driver enforces SSL by default, you can override this with the parameter ` + "`sslmode=disable`" + ` if required.

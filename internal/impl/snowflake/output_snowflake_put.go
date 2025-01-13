@@ -35,6 +35,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
+
+	"github.com/redpanda-data/connect/v4/internal/license"
 )
 
 const (
@@ -66,14 +68,15 @@ func snowflakePutOutputConfig() *service.ConfigSpec {
 		Version("4.0.0").
 		Summary("Sends messages to Snowflake stages and, optionally, calls Snowpipe to load this data into one or more tables.").
 		Description(`
-In order to use a different stage and / or Snowpipe for each message, you can use function interpolations as described
-xref:configuration:interpolation.adoc#bloblang-queries[here]. When using batching, messages are grouped by the calculated
+In order to use a different stage and / or Snowpipe for each message, you can use function interpolations as described in
+xref:configuration:interpolation.adoc#bloblang-queries[Bloblang queries]. When using batching, messages are grouped by the calculated
 stage and Snowpipe and are streamed to individual files in their corresponding stage and, optionally, a Snowpipe
 `+"`insertFiles`"+` REST API call will be made for each individual file.
 
 == Credentials
 
 Two authentication mechanisms are supported:
+
 - User/password
 - Key Pair Authentication
 
@@ -96,7 +99,7 @@ openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8
 `+"```"+`
 
 to generate an encrypted SSH private key. However, in this case, it uses an encryption algorithm called
-`+"`pbeWithMD5AndDES-CBC`"+`, which is part of the PKCS#5 v1.5 and is considered insecure. Due to this, Benthos does not
+`+"`pbeWithMD5AndDES-CBC`"+`, which is part of the PKCS#5 v1.5 and is considered insecure. Due to this, Redpanda Connect does not
 support it and, if you wish to use password-protected keys directly, you must use PKCS#5 v2.0 to encrypt them by using
 the following command (as the current Snowflake docs suggest):
 
@@ -135,7 +138,7 @@ and the following `+"`BENTHOS_PIPE`"+` Snowpipe:
 CREATE OR REPLACE PIPE BENTHOS_DB.PUBLIC.BENTHOS_PIPE AUTO_INGEST = FALSE AS COPY INTO BENTHOS_DB.PUBLIC.BENTHOS_TBL FROM (SELECT * FROM @%BENTHOS_TBL) FILE_FORMAT = (TYPE = JSON COMPRESSION = AUTO)
 `+"```"+`
 
-you can configure Benthos to use the implicit table stage `+"`@%BENTHOS_TBL`"+` as the `+"`stage`"+` and
+you can configure Redpanda Connect to use the implicit table stage `+"`@%BENTHOS_TBL`"+` as the `+"`stage`"+` and
 `+"`BENTHOS_PIPE`"+` as the `+"`snowpipe`"+`. In this case, you must set `+"`compression`"+` to `+"`AUTO`"+` and, if
 using message batching, you'll need to configure an xref:components:processors/archive.adoc[`+"`archive`"+`] processor
 with the `+"`concatenate`"+` format. Since the `+"`compression`"+` is set to `+"`AUTO`"+`, the
@@ -153,6 +156,7 @@ Snowpipe https://docs.snowflake.com/en/user-guide/data-load-snowpipe-rest-apis.h
 and `+"`loadHistoryScan`"+` REST API endpoints which can be used to get information about recent Snowpipe calls. In
 order to query them, you'll first need to generate a valid JWT token for your Snowflake account. There are two methods
 for doing so:
+
 - Using the `+"`snowsql`"+` https://docs.snowflake.com/en/user-guide/snowsql.html[utility^]:
 
 `+"```bash"+`
@@ -176,7 +180,7 @@ If you need to pass in a valid `+"`requestId`"+` to any of these Snowpipe REST A
 xref:guides:bloblang/functions.adoc#uuid_v4[uuid_v4()] string in a metadata field called
 `+"`request_id`"+`, log it via the xref:components:processors/log.adoc[`+"`log`"+`] processor and
 then configure `+"`request_id: ${ @request_id }`"+` ). Alternatively, you can xref:components:logger/about.adoc[enable debug logging]
- and Benthos will print the Request IDs that it sends to Snowpipe.
+ and Redpanda Connect will print the Request IDs that it sends to Snowpipe.
 
 == General troubleshooting
 
@@ -186,7 +190,7 @@ docs for details on how to change this directory via environment variables.
 
 A silent failure can occur due to https://github.com/snowflakedb/gosnowflake/issues/701[this issue^], where the
 underlying https://github.com/snowflakedb/gosnowflake[`+"`gosnowflake`"+` driver^] doesn't return an error and doesn't
-log a failure if it can't figure out the current username. One way to trigger this behavior is by running Benthos in a
+log a failure if it can't figure out the current username. One way to trigger this behavior is by running Redpanda Connect in a
 Docker container with a non-existent user ID (such as `+"`--user 1000:1000`"+`).
 `+service.OutputPerformanceDocs(true, true)).
 		Field(service.NewStringField("account").Description(`Account name, which is the same as the https://docs.snowflake.com/en/user-guide/admin-account-identifier.html#where-are-account-identifiers-used[Account Identifier^].
@@ -206,7 +210,8 @@ and it must be set to the `+"`<cloud>`"+` part of the Account Identifier
 `).Example("aws").Example("gcp").Example("azure").Optional()).
 		Field(service.NewStringField("user").Description("Username.")).
 		Field(service.NewStringField("password").Description("An optional password.").Optional().Secret()).
-		Field(service.NewStringField("private_key_file").Description("The path to a file containing the private SSH key.").Optional()).
+		Field(service.NewStringField("private_key").Description("The private SSH key. `private_key_pass` is required when using encrypted keys.").Optional().Secret()).
+		Field(service.NewStringField("private_key_file").Description("The path to a file containing the private SSH key. `private_key_pass` is required when using encrypted keys.").Optional()).
 		Field(service.NewStringField("private_key_pass").Description("An optional private SSH key passphrase.").Optional().Secret()).
 		Field(service.NewStringField("role").Description("Role.")).
 		Field(service.NewStringField("database").Description("Database.")).
@@ -227,13 +232,14 @@ and it must be set to the `+"`<cloud>`"+` part of the Account Identifier
 			string(CompressionTypeZstandard):  "Messages must be pre-compressed using the Zstandard algorithm. Default `file_extension`: `zst`.",
 		}).Description("Compression type.").Default(string(CompressionTypeAuto))).
 		Field(service.NewInterpolatedStringField("request_id").Description("Request ID. Will be assigned a random UUID (v4) string if not set or empty.").Optional().Default("").Version("v4.12.0")).
-		Field(service.NewInterpolatedStringField("snowpipe").Description(`An optional Snowpipe name. Use the `+"`<snowpipe>`"+` part from `+"`<database>.<schema>.<snowpipe>`"+`.`).Optional()).
+		Field(service.NewInterpolatedStringField("snowpipe").Description("An optional Snowpipe name. Use the `<snowpipe>` part from `<database>.<schema>.<snowpipe>`. `private_key` or `private_key_file` must be set when using this feature.").Optional()).
 		Field(service.NewBoolField("client_session_keep_alive").Description("Enable Snowflake keepalive mechanism to prevent the client session from expiring after 4 hours (error 390114).").Advanced().Default(false)).
 		Field(service.NewBatchPolicyField("batching")).
 		Field(service.NewIntField("max_in_flight").Description("The maximum number of parallel message batches to have in flight at any given time.").Default(1)).
 		LintRule(`root = match {
-  this.exists("password") && this.password != "" && this.exists("private_key_file") && this.private_key_file != "" => [ "both `+"`password`"+` and `+"`private_key_file`"+` can't be set simultaneously" ],
-  this.exists("snowpipe") && this.snowpipe != "" && (!this.exists("private_key_file") || this.private_key_file == "") => [ "`+"`private_key_file`"+` is required when setting `+"`snowpipe`"+`" ],
+  (!this.exists("password") || this.password == "") && (!this.exists("private_key") || this.private_key == "") && (!this.exists("private_key_file") || this.private_key_file == "") => [ "either `+"`password`"+` or `+"`private_key`"+` or `+"`private_key_file`"+` must be set" ],
+  this.exists("password") && this.password != "" && (this.exists("private_key") && this.private_key != "" || this.exists("private_key_file") && this.private_key_file != "") => [ "only one of `+"`password`"+`, `+"`private_key`"+` and `+"`private_key_file`"+` can be set" ],
+  this.exists("snowpipe") && this.snowpipe != "" && !((this.exists("private_key") && this.private_key != "") || (this.exists("private_key_file") && this.private_key_file != "")) => [ "either `+"`private_key`"+` or `+"`private_key_file`"+` must be set when using `+"`snowpipe`"+`" ],
 }`).
 		Example("Kafka / realtime brokers", "Upload message batches from realtime brokers such as Kafka persisting the batch partition and offsets in the stage path and filename similarly to the https://docs.snowflake.com/en/user-guide/kafka-connector-ts.html#step-1-view-the-copy-history-for-the-table[Kafka Connector scheme^] and call Snowpipe to load them into a table. When batching is configured at the input level, it is done per-partition.", `
 input:
@@ -397,6 +403,10 @@ func init() {
 			maxInFlight int,
 			err error,
 		) {
+			if err = license.CheckRunningEnterprise(mgr); err != nil {
+				return
+			}
+
 			if maxInFlight, err = conf.FieldInt("max_in_flight"); err != nil {
 				return
 			}
@@ -413,17 +423,27 @@ func init() {
 
 //------------------------------------------------------------------------------
 
-// getPrivateKey reads and parses the private key
+func wipeSlice(b []byte) {
+	for i := range b {
+		b[i] = '~'
+	}
+}
+
+// getPrivateKeyFromFile reads and parses the private key
 // Inspired from https://github.com/chanzuckerberg/terraform-provider-snowflake/blob/c07d5820bea7ac3d8a5037b0486c405fdf58420e/pkg/provider/provider.go#L367
-func getPrivateKey(f fs.FS, path, passphrase string) (*rsa.PrivateKey, error) {
+func getPrivateKeyFromFile(f fs.FS, path, passphrase string) (*rsa.PrivateKey, error) {
 	privateKeyBytes, err := service.ReadFile(f, path)
+	defer wipeSlice(privateKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read private key %s: %s", path, err)
 	}
 	if len(privateKeyBytes) == 0 {
 		return nil, errors.New("private key is empty")
 	}
+	return getPrivateKey(privateKeyBytes, passphrase)
+}
 
+func getPrivateKey(privateKeyBytes []byte, passphrase string) (*rsa.PrivateKey, error) {
 	privateKeyBlock, _ := pem.Decode(privateKeyBytes)
 	if privateKeyBlock == nil {
 		return nil, errors.New("could not parse private key, key is not in PEM format")
@@ -431,7 +451,7 @@ func getPrivateKey(f fs.FS, path, passphrase string) (*rsa.PrivateKey, error) {
 
 	if privateKeyBlock.Type == "ENCRYPTED PRIVATE KEY" {
 		if passphrase == "" {
-			return nil, errors.New("private key requires a passphrase, but private_key_passphrase was not supplied")
+			return nil, errors.New("private key requires a passphrase, but private_key_pass was not supplied")
 		}
 
 		// Only keys encrypted with pbes2 http://oid-info.com/get/1.2.840.113549.1.5.13 are supported.
@@ -645,11 +665,6 @@ func newSnowflakeWriterFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 
 	authenticator := gosnowflake.AuthTypeJwt
 	if password == "" {
-		var privateKeyFile string
-		if privateKeyFile, err = conf.FieldString("private_key_file"); err != nil {
-			return nil, fmt.Errorf("failed to parse private_key_file: %s", err)
-		}
-
 		var privateKeyPass string
 		if conf.Contains("private_key_pass") {
 			if privateKeyPass, err = conf.FieldString("private_key_pass"); err != nil {
@@ -657,8 +672,25 @@ func newSnowflakeWriterFromConfig(conf *service.ParsedConfig, mgr *service.Resou
 			}
 		}
 
-		if s.privateKey, err = getPrivateKey(mgr.FS(), privateKeyFile, privateKeyPass); err != nil {
-			return nil, fmt.Errorf("failed to read private key: %s", err)
+		var privateKey string
+		if conf.Contains("private_key") {
+			if privateKey, err = conf.FieldString("private_key"); err != nil {
+				return nil, fmt.Errorf("failed to parse private_key: %s", err)
+			}
+		}
+		if privateKey != "" {
+			if s.privateKey, err = getPrivateKey([]byte(privateKey), privateKeyPass); err != nil {
+				return nil, fmt.Errorf("failed to read private key: %s", err)
+			}
+		} else {
+			var privateKeyFile string
+			if privateKeyFile, err = conf.FieldString("private_key_file"); err != nil {
+				return nil, fmt.Errorf("failed to parse private_key_file: %s", err)
+			}
+
+			if s.privateKey, err = getPrivateKeyFromFile(mgr.FS(), privateKeyFile, privateKeyPass); err != nil {
+				return nil, fmt.Errorf("failed to read private key: %s", err)
+			}
 		}
 
 		if s.publicKeyFingerprint, err = calculatePublicKeyFingerprint(s.privateKey); err != nil {

@@ -1,3 +1,17 @@
+// Copyright 2024 Redpanda Data, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package gcp
 
 import (
@@ -48,6 +62,7 @@ func gcpBigQueryCSVConfigFromParsed(conf *service.ParsedConfig) (csvconf gcpBigQ
 }
 
 type gcpBigQueryOutputConfig struct {
+	JobProjectID        string
 	ProjectID           string
 	DatasetID           string
 	TableID             string
@@ -58,6 +73,7 @@ type gcpBigQueryOutputConfig struct {
 	IgnoreUnknownValues bool
 	MaxBadRecords       int
 	JobLabels           map[string]string
+	CredentialsJSON     string
 
 	// CSV options
 	CSVOptions gcpBigQueryCSVConfig
@@ -69,6 +85,12 @@ func gcpBigQueryOutputConfigFromParsed(conf *service.ParsedConfig) (gconf gcpBig
 	}
 	if gconf.ProjectID == "" {
 		gconf.ProjectID = bigquery.DetectProjectID
+	}
+	if gconf.JobProjectID, err = conf.FieldString("job_project"); err != nil {
+		return
+	}
+	if gconf.JobProjectID == "" {
+		gconf.JobProjectID = gconf.ProjectID
 	}
 	if gconf.DatasetID, err = conf.FieldString("dataset"); err != nil {
 		return
@@ -97,6 +119,9 @@ func gcpBigQueryOutputConfigFromParsed(conf *service.ParsedConfig) (gconf gcpBig
 	if gconf.JobLabels, err = conf.FieldStringMap("job_labels"); err != nil {
 		return
 	}
+	if gconf.CredentialsJSON, err = conf.FieldString("credentials_json"); err != nil {
+		return
+	}
 	if gconf.CSVOptions, err = gcpBigQueryCSVConfigFromParsed(conf.Namespace("csv")); err != nil {
 		return
 	}
@@ -105,11 +130,17 @@ func gcpBigQueryOutputConfigFromParsed(conf *service.ParsedConfig) (gconf gcpBig
 
 type gcpBQClientURL string
 
-func (g gcpBQClientURL) NewClient(ctx context.Context, projectID string) (*bigquery.Client, error) {
+func (g gcpBQClientURL) NewClient(ctx context.Context, conf gcpBigQueryOutputConfig) (*bigquery.Client, error) {
 	if g == "" {
-		return bigquery.NewClient(ctx, projectID)
+		var err error
+		var opt []option.ClientOption
+		opt, err = getClientOptionWithCredential(conf.CredentialsJSON, opt)
+		if err != nil {
+			return nil, err
+		}
+		return bigquery.NewClient(ctx, conf.JobProjectID, opt...)
 	}
-	return bigquery.NewClient(ctx, projectID, option.WithoutAuthentication(), option.WithEndpoint(string(g)))
+	return bigquery.NewClient(ctx, conf.JobProjectID, option.WithoutAuthentication(), option.WithEndpoint(string(g)))
 }
 
 func gcpBigQueryConfig() *service.ConfigSpec {
@@ -121,13 +152,15 @@ func gcpBigQueryConfig() *service.ConfigSpec {
 		Description(`
 == Credentials
 
-By default Benthos will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].
+By default Redpanda Connect will use a shared credentials file when connecting to GCP services. You can find out more in xref:guides:cloud/gcp.adoc[].
 
 == Format
 
-This output currently supports only CSV and NEWLINE_DELIMITED_JSON formats. Learn more about how to use GCP BigQuery with them here:
+This output currently supports only CSV, NEWLINE_DELIMITED_JSON and PARQUET, formats. Learn more about how to use GCP BigQuery with them here:
+
 - ` + "https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-json[`NEWLINE_DELIMITED_JSON`^]" + `
 - ` + "https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-csv[`CSV`^]" + `
+- ` + "https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-parquet[`PARQUET`^]" + `
 
 Each message may contain multiple elements separated by newlines. For example a single message containing:
 
@@ -152,11 +185,18 @@ The same is true for the CSV format.
 
 === CSV
 
-For the CSV format when the field ` + "`csv.header`" + ` is specified a header row will be inserted as the first line of each message batch. If this field is not provided then the first message of each message batch must include a header line.` + service.OutputPerformanceDocs(true, true)).
+For the CSV format when the field ` + "`csv.header`" + ` is specified a header row will be inserted as the first line of each message batch. If this field is not provided then the first message of each message batch must include a header line.
+
+=== Parquet
+
+For parquet, the data can be encoded using the ` + "`parquet_encode`" + ` processor and each message that is sent to the output must be a full parquet message.
+
+` + service.OutputPerformanceDocs(true, true)).
 		Field(service.NewStringField("project").Description("The project ID of the dataset to insert data to. If not set, it will be inferred from the credentials or read from the GOOGLE_CLOUD_PROJECT environment variable.").Default("")).
+		Field(service.NewStringField("job_project").Description("The project ID in which jobs will be exectuted. If not set, project will be used.").Default("")).
 		Field(service.NewStringField("dataset").Description("The BigQuery Dataset ID.")).
 		Field(service.NewStringField("table").Description("The table to insert messages to.")).
-		Field(service.NewStringEnumField("format", string(bigquery.JSON), string(bigquery.CSV)).
+		Field(service.NewStringEnumField("format", string(bigquery.JSON), string(bigquery.CSV), string(bigquery.Parquet)).
 			Description("The format of each incoming message.").
 			Default(string(bigquery.JSON))).
 		Field(service.NewIntField("max_in_flight").
@@ -184,6 +224,7 @@ For the CSV format when the field ` + "`csv.header`" + ` is specified a header r
 			Advanced().
 			Default(false)).
 		Field(service.NewStringMapField("job_labels").Description("A list of labels to add to the load job.").Default(map[string]any{})).
+		Field(service.NewStringField("credentials_json").Description("An optional field to set Google Service Account Credentials json.").Secret().Default("")).
 		Field(service.NewObjectField("csv",
 			service.NewStringListField("header").
 				Description("A list of values to use as header for each batch of messages. If not specified the first line of each message will be used as header.").
@@ -204,7 +245,7 @@ For the CSV format when the field ` + "`csv.header`" + ` is specified a header r
 				Advanced().
 				Default(string(bigquery.UTF_8)),
 			service.NewIntField("skip_leading_rows").
-				Description("The number of rows at the top of a CSV file that BigQuery will skip when reading data. The default value is 1 since Benthos will add the specified header in the first line of each batch sent to BigQuery.").
+				Description("The number of rows at the top of a CSV file that BigQuery will skip when reading data. The default value is 1 since Redpanda Connect will add the specified header in the first line of each batch sent to BigQuery.").
 				Advanced().
 				Default(1),
 		).Description("Specify how CSV data should be interpretted.")).
@@ -242,7 +283,9 @@ type gcpBigQueryOutput struct {
 
 	fieldDelimiterBytes []byte
 	csvHeaderBytes      []byte
-	newLineBytes        []byte
+	// if nil, then this is a format that we expect to be created upstream in a processor and each
+	// message is a file that needs to be loaded.
+	newLineBytes []byte
 
 	log *service.Logger
 }
@@ -255,7 +298,9 @@ func newGCPBigQueryOutput(
 		conf: conf,
 		log:  log,
 	}
-
+	if conf.Format == string(bigquery.Parquet) {
+		return g, nil
+	}
 	g.newLineBytes = []byte("\n")
 	if conf.Format != string(bigquery.CSV) {
 		return g, nil
@@ -301,7 +346,7 @@ func (g *gcpBigQueryOutput) Connect(ctx context.Context) (err error) {
 	defer g.connMut.Unlock()
 
 	var client *bigquery.Client
-	if client, err = g.clientURL.NewClient(context.Background(), g.conf.ProjectID); err != nil {
+	if client, err = g.clientURL.NewClient(context.Background(), g.conf); err != nil {
 		err = fmt.Errorf("error creating big query client: %w", err)
 		return
 	}
@@ -311,7 +356,7 @@ func (g *gcpBigQueryOutput) Connect(ctx context.Context) (err error) {
 		}
 	}()
 
-	dataset := client.DatasetInProject(client.Project(), g.conf.DatasetID)
+	dataset := client.DatasetInProject(g.conf.ProjectID, g.conf.DatasetID)
 	if _, err = dataset.Metadata(ctx); err != nil {
 		if hasStatusCode(err, http.StatusNotFound) {
 			err = fmt.Errorf("dataset does not exist: %v", g.conf.DatasetID)
@@ -352,6 +397,44 @@ func (g *gcpBigQueryOutput) WriteBatch(ctx context.Context, batch service.Messag
 		return service.ErrNotConnected
 	}
 
+	if g.newLineBytes == nil {
+		var batchErr *service.BatchError
+		setErr := func(idx int, err error) {
+			if batchErr == nil {
+				batchErr = service.NewBatchError(batch, err)
+			}
+			batchErr = batchErr.Failed(idx, err)
+		}
+		jobs := map[int]*bigquery.Job{}
+		for idx, msg := range batch {
+			msgBytes, err := msg.AsBytes()
+			if err != nil {
+				setErr(idx, err)
+				continue
+			}
+			job, err := g.createTableLoader(&msgBytes).Run(ctx)
+			if err != nil {
+				setErr(idx, err)
+				continue
+			}
+			jobs[idx] = job
+		}
+		for idx, job := range jobs {
+			status, err := job.Wait(ctx)
+			if err != nil {
+				setErr(idx, fmt.Errorf("error while waiting on bigquery job: %w", err))
+				continue
+			}
+			if err = errorFromStatus(status); err != nil {
+				setErr(idx, err)
+			}
+		}
+		if batchErr != nil {
+			return batchErr
+		}
+		return nil
+	}
+
 	var data bytes.Buffer
 
 	if g.csvHeaderBytes != nil {
@@ -384,7 +467,7 @@ func (g *gcpBigQueryOutput) WriteBatch(ctx context.Context, batch service.Messag
 }
 
 func (g *gcpBigQueryOutput) createTableLoader(data *[]byte) *bigquery.Loader {
-	table := g.client.DatasetInProject(g.client.Project(), g.conf.DatasetID).Table(g.conf.TableID)
+	table := g.client.DatasetInProject(g.conf.ProjectID, g.conf.DatasetID).Table(g.conf.TableID)
 
 	source := bigquery.NewReaderSource(bytes.NewReader(*data))
 	source.SourceFormat = bigquery.DataFormat(g.conf.Format)
